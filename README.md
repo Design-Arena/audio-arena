@@ -2,7 +2,7 @@
 
 ConversationBench is a benchmark for evaluating speech-to-speech voice AI models through spoken audio. It tests knowledge retrieval, tool use, error recovery, adversarial attacks, long-range memory, and numerical reasoning across 75 turns of a single continuous conversation.
 
-ConversationBench is part of [Audio Arena](https://audioarena.ai), a project by [Arcada Labs](https://arcada.dev).
+ConversationBench is part of [Audio Arena](https://audioarena.ai), built by [Arcada Labs](https://arcada.dev).
 
 - **Leaderboard & results**: [audioarena.ai](https://audioarena.ai)
 - **Dataset on Hugging Face**: [arcada-labs/audio-arena](https://huggingface.co/datasets/arcada-labs/audio-arena)
