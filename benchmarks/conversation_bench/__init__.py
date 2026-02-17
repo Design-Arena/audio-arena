@@ -1,4 +1,4 @@
-"""Conference assistant benchmark configuration."""
+"""Conversation bench benchmark configuration."""
 from .config import BenchmarkConfig
 
 __all__ = ["BenchmarkConfig"]

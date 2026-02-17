@@ -1,20 +1,25 @@
-# Audio Arena
+# ConversationBench: Multi-Turn Speech-to-Speech Evaluation Benchmark
 
-A rigorous, multi-turn evaluation benchmark for voice AI models. Built by [Arcada Labs](https://arcada.dev) and used to power the [Audio Arena](https://audioarena.ai) leaderboard.
+ConversationBench is a benchmark for evaluating speech-to-speech voice AI models through spoken audio. It tests knowledge retrieval, tool use, error recovery, adversarial attacks, long-range memory, and numerical reasoning across 75 turns of a single continuous conversation.
+
+ConversationBench is part of [Audio Arena](https://audioarena.ai), a project by [Arcada Labs](https://arcada.dev).
 
 - **Leaderboard & results**: [audioarena.ai](https://audioarena.ai)
 - **Dataset on Hugging Face**: [arcada-labs/audio-arena](https://huggingface.co/datasets/arcada-labs/audio-arena)
 - **Source code**: [github.com/Design-Arena/audio-arena](https://github.com/Design-Arena/audio-arena)
 
-## Background
+## What makes this different from text benchmarks
 
-Audio Arena started as an extension of [Kwindla Hultman Kramer](https://github.com/kwindla)'s [30-turn multi-turn evaluation](https://github.com/kwindla/aiewf-eval) ([blog post](https://www.daily.co/blog/benchmarking-llms-for-voice-agent-use-cases/)), which tested text and speech-to-speech models on tool use, instruction following, and knowledge base grounding in an AI Engineer World's Fair conference assistant scenario.
+- **Audio input**: Each turn is a `.wav` file generated with TTS (OpenAI `tts-1`, `alloy` voice), not text. Models must process speech, not read.
+- **Continuous conversation**: All 75 turns form a single continuous conversation. Later turns reference earlier ones. The model must track registrations, cancellations, corrections, and prior answers across the full session.
+- **Tool use over speech**: The model has 9 functions it can call (register for sessions, cancel actions, check conflicts, etc.) and must decide when and how to call them based on spoken instructions.
+- **Adversarial and edge-case turns**: Prompt injection, sycophancy traps, false presuppositions, distractor injection, and implicit corrections — all delivered via voice.
 
-The original 30 turns proved insufficiently challenging — most frontier models scored above 90% across nearly every category. We discarded the majority of them and rebuilt the benchmark from scratch as a **75-turn static hard benchmark**, retaining only a handful of basic QA and tool-use turns (revised for consistency).
+## Benchmark scenario
 
-The result is 2.5x larger and substantially harder. Turns are designed to probe adversarial traps, multi-step tool use, long-range memory, error recovery, cancellation flows, ambiguity handling, implicit correction, and distractor injection. See [Methodology](#methodology) for the full scoring rubric.
+The conversation simulates a voice assistant for the **AI Engineer World's Fair 2025** conference. The user ("Jennifer Smith") asks about sessions, registers for talks, submits suggestions, deals with errors, and tests the model's limits over 75 turns.
 
-At a glance: **75 turns, 9 tools, ~12K-token knowledge base, and pre-recorded audio for every turn.**
+The model is grounded in a **946-line knowledge base** containing the full conference schedule, speaker bios, venue logistics, ticket pricing, and more. It also has access to **9 tool functions** for actions like registering for sessions, voting, and submitting dietary requests.
 
 ## Quick Start
 
@@ -25,11 +30,11 @@ uv sync
 # List available benchmarks
 uv run audio-arena list-benchmarks
 
-# Run a benchmark. Results will be saved to runs/conference_assistant/<timestamp>_<model_name>
-uv run audio-arena run conference_assistant --model claude-sonnet-4-5 --service anthropic
+# Run a benchmark. Results will be saved to runs/conversation_bench/<timestamp>_<model_name>
+uv run audio-arena run conversation_bench --model claude-sonnet-4-5 --service anthropic
 
 # Judge the results
-uv run audio-arena judge runs/conference_assistant/<timestamp>_claude-sonnet-4-5
+uv run audio-arena judge runs/conversation_bench/<timestamp>_claude-sonnet-4-5
 ```
 
 ## Installation
@@ -74,26 +79,26 @@ You can also create a `.env` file in the project root with these variables.
 uv run audio-arena run <benchmark> --model <model> --service <service>
 
 # Examples:
-uv run audio-arena run conference_assistant --model claude-sonnet-4-5 --service anthropic
-uv run audio-arena run conference_assistant --model gpt-4o --service openai
-uv run audio-arena run conference_assistant --model gemini-2.5-flash --service google
+uv run audio-arena run conversation_bench --model claude-sonnet-4-5 --service anthropic
+uv run audio-arena run conversation_bench --model gpt-4o --service openai
+uv run audio-arena run conversation_bench --model gemini-2.5-flash --service google
 
 # Realtime audio models 
-uv run audio-arena run conference_assistant --model gpt-realtime --service openai-realtime
-uv run audio-arena run conference_assistant --model gemini-2.5-flash-native-audio-preview-12-2025 --service gemini-live
-uv run audio-arena run conference_assistant --model ultravox-v0.7 --service ultravox-realtime
+uv run audio-arena run conversation_bench --model gpt-realtime --service openai-realtime
+uv run audio-arena run conversation_bench --model gemini-2.5-flash-native-audio-preview-12-2025 --service gemini-live
+uv run audio-arena run conversation_bench --model ultravox-v0.7 --service ultravox-realtime
 
 # Nova Sonic (no --service needed, pipeline creates its own LLM)
-uv run audio-arena run conference_assistant --model amazon.nova-2-sonic-v1:0 --pipeline nova-sonic
+uv run audio-arena run conversation_bench --model amazon.nova-2-sonic-v1:0 --pipeline nova-sonic
 
 # Grok (xAI) Realtime
-uv run audio-arena run conference_assistant --model grok-realtime
+uv run audio-arena run conversation_bench --model grok-realtime
 
 # Debug with limited turns
-uv run audio-arena run conference_assistant --model gpt-4o --service openai --only-turns 0,1,2
+uv run audio-arena run conversation_bench --model gpt-4o --service openai --only-turns 0,1,2
 
 # Verbose logging
-uv run audio-arena run conference_assistant --model gpt-4o --service openai --verbose
+uv run audio-arena run conversation_bench --model gpt-4o --service openai --verbose
 ```
 
 ### Judging Runs
@@ -102,13 +107,13 @@ After a benchmark run completes, judge the results using Claude:
 
 ```bash
 # Judge a specific run
-uv run audio-arena judge runs/conference_assistant/20251213T123456_claude-sonnet-4-5
+uv run audio-arena judge runs/conversation_bench/20251213T123456_claude-sonnet-4-5
 
 # Judge with specific turns
-uv run audio-arena judge runs/conference_assistant/20251213T123456_claude-sonnet-4-5 --only-turns 0,1,2
+uv run audio-arena judge runs/conversation_bench/20251213T123456_claude-sonnet-4-5 --only-turns 0,1,2
 
 # Use a different judge model
-uv run audio-arena judge runs/conference_assistant/20251213T123456_claude-sonnet-4-5 --judge-model claude-sonnet-4-5
+uv run audio-arena judge runs/conversation_bench/20251213T123456_claude-sonnet-4-5 --judge-model claude-sonnet-4-5
 ```
 
 The Claude judge evaluates each turn on up to 5 dimensions:
@@ -131,10 +136,10 @@ When turn-taking failures occur, the judge is more lenient on `instruction_follo
 
 ```bash
 # Judge a speech-to-speech run (turn-taking analysis runs automatically)
-uv run audio-arena judge runs/conference_assistant/20260111T123456_gpt-realtime_abc123
+uv run audio-arena judge runs/conversation_bench/20260111T123456_gpt-realtime_abc123
 
 # Skip turn-taking analysis
-uv run audio-arena judge runs/conference_assistant/20260111T123456_gpt-realtime_abc123 --skip-turn-taking
+uv run audio-arena judge runs/conversation_bench/20260111T123456_gpt-realtime_abc123 --skip-turn-taking
 ```
 
 Judge outputs (saved to the run directory):
@@ -176,7 +181,7 @@ Additional providers (OpenRouter, Groq, Cerebras) are also supported — run `uv
 You can also use fully-qualified class names:
 
 ```bash
-uv run audio-arena run conference_assistant \
+uv run audio-arena run conversation_bench \
     --model gpt-4o \
     --service pipecat.services.openai.llm.OpenAILLMService
 ```
@@ -195,7 +200,7 @@ Benchmarks are located in `benchmarks/`. Each benchmark is a self-contained Pyth
 
 | Benchmark | Description | Knowledge Base |
 |-----------|-------------|----------------|
-| `conference_assistant` | 75-turn hard benchmark | ~12K tokens |
+| `conversation_bench` | 75-turn hard benchmark | ~12K tokens |
 
 ## Pipelines
 
@@ -212,7 +217,7 @@ Runs are saved to `runs/<benchmark>/<timestamp>_<model>/`:
 
 ```
 runs/
-└── conference_assistant/
+└── conversation_bench/
     └── 20251213T123456_claude-sonnet-4-5/
         ├── transcript.jsonl        # Turn-by-turn results
         ├── runtime.json            # Run metadata and metrics
@@ -249,7 +254,7 @@ audio-arena/
 │       └── turn_taking.py         # Turn-taking analysis
 │
 ├── benchmarks/
-│   └── conference_assistant/      # 75-turn hard benchmark
+│   └── conversation_bench/      # 75-turn hard benchmark
 │       ├── config.py
 │       ├── turns.py
 │       ├── tools.py
@@ -270,13 +275,13 @@ For detailed per-turn timing analysis of speech-to-speech models, use the compre
 
 ```bash
 # Analyze a run with summary statistics
-uv run python scripts/analyze_turn_metrics.py runs/conference_assistant/<timestamp>_<model>
+uv run python scripts/analyze_turn_metrics.py runs/conversation_bench/<timestamp>_<model>
 
 # Show per-turn breakdown table
-uv run python scripts/analyze_turn_metrics.py runs/conference_assistant/<timestamp>_<model> -v
+uv run python scripts/analyze_turn_metrics.py runs/conversation_bench/<timestamp>_<model> -v
 
 # Output as JSON (for programmatic use)
-uv run python scripts/analyze_turn_metrics.py runs/conference_assistant/<timestamp>_<model> --json
+uv run python scripts/analyze_turn_metrics.py runs/conversation_bench/<timestamp>_<model> --json
 ```
 
 ### Metrics Explained
@@ -311,22 +316,35 @@ When run with `--json`, the script outputs structured data that can be saved:
 
 ```bash
 # Save metrics to JSON file
-uv run python scripts/analyze_turn_metrics.py runs/conference_assistant/<timestamp>_<model> --json > turn_metrics.json
+uv run python scripts/analyze_turn_metrics.py runs/conversation_bench/<timestamp>_<model> --json > turn_metrics.json
 ```
 
 ## Methodology
 
-Every turn is designed to stress-test a specific failure mode:
+### Original benchmark
 
-| Category | What it tests |
-|----------|---------------|
-| **Adversarial traps** | Authority appeals, plausible hallucinations, prompt injection, near-miss entities, false recall |
-| **Multi-step tool use & long-range memory** | Conditional logic, parallel chains, implicit requirements, rollbacks, recall across many turns |
-| **Error recovery** | Cascading failures, partial success states, ambiguous error messages |
-| **Cancellation flow & state tracking** | Changes of mind, correct handling of cancelled actions across turns |
-| **Ambiguity handling** | Same-name entities, compound ambiguity, dependent or contradictory constraints |
-| **Implicit correction** | Nested misconceptions, partial truths, false attributions — correct without over-correcting |
-| **Distractor injection** | Buried questions, emotional manipulation, technical tangents requiring focus on actual intent |
+ConversationBench builds on the original [30-turn multi-turn evaluation](https://github.com/kwindla/aiewf-eval) created by [Kwindla Kramer](https://github.com/kwindla) at [Daily](https://www.daily.co/) ([blog post](https://www.daily.co/blog/benchmarking-llms-for-voice-agent-use-cases/)). That benchmark tested both text and speech-to-speech models on tool use, instruction following, and knowledge base grounding in an AI Engineer World's Fair conference assistant scenario. It used a [Pipecat](https://github.com/pipecat-ai/pipecat)-based evaluation pipeline to drive multi-turn conversations against models from OpenAI, Google, Anthropic, and others, with Claude as an automated judge.
+
+The original 30-turn benchmark was an important proof of concept — it demonstrated that multi-turn conversation evaluation over audio was both feasible and revealing. However, during development of ConversationBench we found that 30 turns were not sufficiently challenging: most frontier models scored above 90% on nearly every category, making it difficult to differentiate between models or identify meaningful failure modes.
+
+### What changed in ConversationBench
+
+We replaced the majority of the original turns and rebuilt the benchmark from scratch as a **75-turn static hard benchmark**. Only a small number of basic QA and tool-use turns from the original were retained, and even those were revised.
+
+Key changes:
+
+- **Most original questions were removed.** Only a handful of basic QA and tool-use turns were retained (and revised). The remaining turns are entirely new.
+- **2.5x more turns.** The benchmark grew from 30 to 75 turns, enabling deeper stateful conversation testing and longer-range memory challenges.
+- **Harder categories across the board:**
+  - *Adversarial traps* — authority appeals, plausible hallucinations, subtle prompt injection, near-miss entities, false recall
+  - *Multi-step tool use & long-range memory* — conditional logic, parallel chains, implicit requirements, rollbacks, recall across many turns
+  - *Error recovery* — cascading failures, partial success states, ambiguous error messages
+  - *Cancellation flow & state tracking* — changes of mind, correct handling of cancelled actions across turns
+  - *Ambiguity handling* — same-name entities, compound ambiguity, dependent or contradictory constraints
+  - *Implicit correction* — nested misconceptions, partial truths, false attributions
+  - *Distractor injection* — buried questions, emotional manipulation, technical tangents
+- **Expanded knowledge base.** The grounding document grew to 946 lines to support the more complex queries.
+- **New evaluation dimensions.** ConversationBench adds `state_tracking` and `ambiguity_handling` as scored dimensions, in addition to the original three (`tool_use_correct`, `instruction_following`, `kb_grounding`).
 
 ### Scoring Rubric
 
@@ -340,7 +358,7 @@ Every turn is designed to stress-test a specific failure mode:
 
 **Turn-taking leniency.** For speech-to-speech runs, a `turn_taking` dimension captures audio timing issues (overlaps, interruptions, missing responses). When turn-taking fails, the judge is more lenient on `instruction_following` to account for transcription artifacts.
 
-The benchmark is **static** — the same 75 inputs and audio files are used for every run, with golden expectations defined in `benchmarks/conference_assistant/turns.py`, making results directly comparable across models.
+The benchmark is **static**: the same 75 user inputs (and corresponding audio) are used for every run, with golden expectations defined in `benchmarks/conversation_bench/turns.py`, so results are comparable across models and runs.
 
 ## Acknowledgments
 

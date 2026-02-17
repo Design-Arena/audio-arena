@@ -10,7 +10,7 @@ which is compatible with OpenAI's Realtime API but has several protocol differen
 - Some validation fields have non-standard values
 
 Usage:
-    uv run audio-arena run conference_assistant --model grok-realtime --service openai-realtime
+    uv run audio-arena run conversation_bench --model grok-realtime --service openai-realtime
 """
 
 import json

@@ -11,7 +11,7 @@ Uses a two-phase approach:
 2. Realignment pass: Detect early/late function calls and adjust scoring
 
 Usage via CLI:
-    uv run audio-arena judge runs/conference_assistant/20251215T202910_gemini-...
+    uv run audio-arena judge runs/conversation_bench/20251215T202910_gemini-...
     uv run audio-arena judge runs/... --only-turns 0,1,2
     uv run audio-arena judge runs/... --debug
 """
@@ -341,7 +341,7 @@ def format_turns_for_claude(
         if turn_idx >= len(expected_turns):
             continue
 
-        # Both transcript and expected_turns are 0-based: turn 0 = first turn (see TranscriptRecorder.start_turn and benchmarks/conference_assistant/turns.py).
+        # Both transcript and expected_turns are 0-based: turn 0 = first turn (see TranscriptRecorder.start_turn and benchmarks/conversation_bench/turns.py).
         expected = expected_turns[turn_idx]
 
         lines.append(f"## Turn {turn_idx}")
@@ -377,7 +377,7 @@ def format_turns_for_claude(
             if subcategory:
                 lines.append(f"**Subcategory**: {subcategory}")
             # Tell Claude which dimensions to actually score for this turn
-            from benchmarks.conference_assistant.turns import get_relevant_dimensions
+            from benchmarks.conversation_bench.turns import get_relevant_dimensions
             relevant_dims = get_relevant_dimensions(expected)
             lines.append(f"**Score Dimensions**: {', '.join(relevant_dims)}")
             lines.append("")
@@ -434,7 +434,7 @@ async def judge_with_claude(
 
     # Get expected turns from parameter or import
     if expected_turns is None:
-        from benchmarks.conference_assistant.turns import turns as expected_turns
+        from benchmarks.conversation_bench.turns import turns as expected_turns
 
     # Filter records if only_turns specified
     if only_turns is not None:
@@ -881,7 +881,7 @@ def main():
         from audio_arena.cli import load_benchmark
         expected_turns = load_benchmark(benchmark_name).turns
     except Exception:
-        from benchmarks.conference_assistant.turns import turns as expected_turns
+        from benchmarks.conversation_bench.turns import turns as expected_turns
 
     # Run judgment
     try:

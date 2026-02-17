@@ -1,4 +1,4 @@
-"""Configuration for the conference assistant benchmark."""
+"""Configuration for the conversation bench benchmark."""
 from pathlib import Path
 
 from .turns import turns
@@ -7,10 +7,10 @@ from .system import system_instruction
 
 
 class BenchmarkConfig:
-    """Configuration for the conference assistant benchmark."""
+    """Configuration for the conversation bench benchmark."""
 
     # Benchmark metadata
-    name = "conference_assistant"
+    name = "conversation_bench"
     description = "75-turn hard benchmark with ~12K token knowledge base and 9 tools"
 
     # Benchmark data

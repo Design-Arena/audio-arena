@@ -1,8 +1,8 @@
 """Audio Arena: Multi-turn voice AI evaluation framework CLI.
 
 Usage:
-    uv run audio-arena run conference_assistant --model claude-sonnet-4-5 --service anthropic
-    uv run audio-arena judge runs/conference_assistant/20251213T123456_claude-sonnet-4-5
+    uv run audio-arena run conversation_bench --model claude-sonnet-4-5 --service anthropic
+    uv run audio-arena judge runs/conversation_bench/20251213T123456_claude-sonnet-4-5
     uv run audio-arena list-benchmarks
 """
 
@@ -189,9 +189,9 @@ def run(
     """Run a benchmark against an LLM.
 
     Examples:
-        uv run audio-arena run conference_assistant --model claude-sonnet-4-5 --service anthropic
-        uv run audio-arena run conference_assistant --model gpt-4o --service openai
-        uv run audio-arena run conference_assistant --model gpt-realtime --service openai-realtime --pipeline realtime
+        uv run audio-arena run conversation_bench --model claude-sonnet-4-5 --service anthropic
+        uv run audio-arena run conversation_bench --model gpt-4o --service openai
+        uv run audio-arena run conversation_bench --model gpt-realtime --service openai-realtime --pipeline realtime
     """
     asyncio.run(_run(benchmark_name, model, service, pipeline, only_turns, verbose))
 
@@ -277,8 +277,8 @@ def judge(
     """Judge a completed benchmark run.
 
     Examples:
-        uv run audio-arena judge runs/conference_assistant/20251213T123456_claude-sonnet-4-5
-        uv run audio-arena judge runs/conference_assistant/20251213T123456_claude-sonnet-4-5 --only-turns 0,1,2
+        uv run audio-arena judge runs/conversation_bench/20251213T123456_claude-sonnet-4-5
+        uv run audio-arena judge runs/conversation_bench/20251213T123456_claude-sonnet-4-5 --only-turns 0,1,2
         uv run audio-arena judge runs/.../run_dir --skip-turn-taking
     """
     run_path = Path(run_dir)
@@ -304,7 +304,7 @@ def judge(
     except Exception:
         # Fall back to shared turns module
         click.echo(f"Could not load benchmark '{benchmark_name}', using shared turns module")
-        from benchmarks.conference_assistant.turns import turns as expected_turns
+        from benchmarks.conversation_bench.turns import turns as expected_turns
 
     # Run judge
     from audio_arena.judging.claude_judge import judge_with_claude, load_transcript, write_outputs
