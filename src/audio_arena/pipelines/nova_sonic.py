@@ -24,12 +24,84 @@ from pipecat.frames.frames import (
     TTSAudioRawFrame,
     TTSTextFrame,
 )
-from audio_arena.processors.audio_buffer import WallClockAlignedAudioBufferProcessor
+from multi_turn_eval.processors.audio_buffer import WallClockAlignedAudioBufferProcessor
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.services.aws.nova_sonic.llm import AWSNovaSonicLLMService
 from pipecat.transports.base_transport import TransportParams
 
-from audio_arena.transports.null_audio_output import NullAudioOutputTransport
+from multi_turn_eval.transports.null_audio_output import NullAudioOutputTransport
+
+
+class AudioBuffer:
+    """Rolling buffer for user audio chunks during session transitions.
+
+    Modeled after the AWS reference SessionTransitionManager's AudioBuffer.
+    Keeps the last N seconds of user audio so it can be replayed to a new
+    session after rotation, preventing audio loss during transitions.
+    """
+
+    def __init__(self, max_duration_seconds: float = 3.0, sample_rate: int = 16000, sample_width: int = 2):
+        from collections import deque
+
+        self.max_duration_seconds = max_duration_seconds
+        self.sample_rate = sample_rate
+        self.sample_width = sample_width
+        self.max_buffer_size = int(max_duration_seconds * sample_rate * sample_width)
+        self.buffer: deque = deque()
+        self.total_size = 0
+
+    def add_chunk(self, audio_chunk: bytes):
+        self.buffer.append(audio_chunk)
+        self.total_size += len(audio_chunk)
+        while self.total_size > self.max_buffer_size and self.buffer:
+            removed = self.buffer.popleft()
+            self.total_size -= len(removed)
+
+    def get_all_chunks(self) -> list:
+        return list(self.buffer)
+
+    def get_concatenated(self) -> bytes:
+        return b"".join(self.buffer)
+
+    def clear(self):
+        self.buffer.clear()
+        self.total_size = 0
+
+    @property
+    def duration_seconds(self) -> float:
+        if self.sample_rate == 0 or self.sample_width == 0:
+            return 0.0
+        return self.total_size / (self.sample_rate * self.sample_width)
+
+    @property
+    def is_empty(self) -> bool:
+        return len(self.buffer) == 0
+
+
+class AudioCaptureProcessor(FrameProcessor):
+    """Pipeline processor that captures InputAudioRawFrame into a rolling AudioBuffer.
+
+    Sits in the pipeline between PacedInputTransport and the LLM to maintain a
+    rolling window of recent user audio. The buffer contents can be replayed
+    after a session rotation to avoid losing audio that was in-flight.
+    """
+
+    def __init__(self, audio_buffer: AudioBuffer, **kwargs):
+        super().__init__(**kwargs)
+        self._audio_buffer = audio_buffer
+        self._capturing = True
+
+    def pause_capture(self):
+        self._capturing = False
+
+    def resume_capture(self):
+        self._capturing = True
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection):
+        await super().process_frame(frame, direction)
+        if self._capturing and isinstance(frame, InputAudioRawFrame):
+            self._audio_buffer.add_chunk(frame.audio)
+        await self.push_frame(frame, direction)
 
 
 class ResamplingSileroVAD(SileroVADAnalyzer):
@@ -96,7 +168,10 @@ class NovaSonicLLMServiceWithCompletionSignal(AWSNovaSonicLLMService):
     4. Emits TTFB metrics (time from trigger to first audio)
     5. Supports Nova 2 Sonic VAD configuration (endpointingSensitivity)
     6. Overrides reset_conversation() with retry limits to prevent infinite error cascade
+    7. Supports proactive session rotation before the 8-minute hard timeout
     """
+
+    PROACTIVE_ROTATION_THRESHOLD_SECONDS = 360  # 6 min -- rotate well before the 8-min limit
 
     def __init__(
         self,
@@ -143,6 +218,9 @@ class NovaSonicLLMServiceWithCompletionSignal(AWSNovaSonicLLMService):
         self._on_retriggered = on_retriggered
         self._on_max_reconnects_exceeded = on_max_reconnects_exceeded
 
+        # Proactive session rotation timer
+        self._session_start_time = time.time()
+
     def can_generate_metrics(self) -> bool:
         """Enable metrics generation for TTFB tracking.
 
@@ -170,16 +248,145 @@ class NovaSonicLLMServiceWithCompletionSignal(AWSNovaSonicLLMService):
             logger.info(f"Resetting reconnect counter (was {self._reconnect_attempts})")
         self._reconnect_attempts = 0
 
-    def _truncate_context_for_reconnection(self):
-        """Truncate context for reconnection to fit within Nova Sonic's limits.
+    def needs_proactive_rotation(self) -> bool:
+        """Check if the session should be proactively rotated before the 8-min timeout."""
+        if self._session_start_time is None or self._is_reconnecting:
+            return False
+        return (time.time() - self._session_start_time) >= self.PROACTIVE_ROTATION_THRESHOLD_SECONDS
 
-        Nova Sonic has strict context limits during session reconnection (~5-10K chars total).
-        Strategy: Use a minimal system prompt (just core instructions) + most recent 1 turn (2 messages).
+    async def _drop_connection(self):
+        """Drop the current Bedrock connection without writing to the stream.
 
-        Based on testing:
-        - 21.6K chars: "Chat history is over max limit" error
-        - 10.8K chars: Still too large
-        - Need to stay under ~5K chars total for reliable reconnection
+        Unlike the base class _disconnect(), this never sends promptEnd/sessionEnd
+        events — it just drops the connection. This avoids "write to closed stream"
+        errors that occur when the base class tries to gracefully close a degraded
+        or half-closed AWS stream.
+
+        Follows the AWS reference SessionTransitionManager pattern: the old session
+        is simply discarded, not gracefully terminated.
+        """
+        logger.info("Dropping connection (no writes to old stream)")
+
+        # 1. Cancel receive task first so it doesn't see errors and trigger
+        #    a reactive reset_conversation() cascade
+        if self._receive_task and not self._receive_task.done():
+            self._receive_task.cancel()
+            try:
+                await asyncio.wait_for(self._receive_task, timeout=1.0)
+            except (asyncio.CancelledError, asyncio.TimeoutError, Exception):
+                pass
+            self._receive_task = None
+
+        # 2. Close the stream (but don't send anything to it first)
+        if self._stream:
+            try:
+                await asyncio.wait_for(self._stream.close(), timeout=2.0)
+            except Exception:
+                pass
+            self._stream = None
+
+        # 3. Drop the client
+        self._client = None
+
+        # 4. Reset ALL connection-specific state (mirrors base _disconnect)
+        self._prompt_name = None
+        self._input_audio_content_name = None
+        self._content_being_received = None
+        self._assistant_is_responding = False
+        self._may_need_repush_assistant_text = False
+        self._ready_to_send_context = False
+        self._handling_bot_stopped_speaking = False
+        self._triggering_assistant_response = False
+        self._waiting_for_trigger_transcription = False
+        self._disconnecting = False
+        self._connected_time = None
+        self._user_text_buffer = ""
+        self._assistant_text_buffer = ""
+        self._completed_tool_calls = set()
+        self._audio_input_started = False
+
+        logger.info("Connection dropped, state reset")
+
+    async def proactive_session_rotation(self):
+        """Proactively rotate to a fresh Bedrock session at a clean turn boundary.
+
+        Unlike the reactive reset_conversation() (triggered by crash), this is
+        called between turns when the pipeline state is clean.  It preserves
+        the full conversation history so the model doesn't lose accumulated state.
+
+        Pattern: drop old connection → create fresh connection → replay context.
+        If Nova rejects the full history ("Chat history over max limit"), retries
+        with smart truncation that keeps tool-call messages (state-carrying) and
+        drops old Q&A text.
+        """
+        elapsed = time.time() - self._session_start_time
+        logger.info(
+            f"{'=' * 60}\n"
+            f"PROACTIVE SESSION ROTATION (session age: {elapsed:.0f}s)\n"
+            f"{'=' * 60}"
+        )
+
+        self._is_reconnecting = True
+
+        # Save full context, prepare with minimal system prompt but keep ALL messages
+        saved_context = self._context
+        self._truncate_context_for_reconnection(proactive=True)
+        full_context = self._context
+
+        # Drop the old connection without writing to it
+        await self._drop_connection()
+
+        # Restore context and try connecting with full history
+        self._context = full_context
+        try:
+            await self._start_connecting()
+            if self._context:
+                await self._handle_context(self._context)
+        except Exception as e:
+            error_msg = str(e).lower()
+            if "max limit" in error_msg or "over max" in error_msg or "too large" in error_msg:
+                logger.warning(
+                    f"Full context rejected by Nova ({e}). "
+                    f"Retrying with smart truncation (keeping tool messages)..."
+                )
+                # Restore saved context and re-truncate with tool-priority fallback
+                self._context = saved_context
+                self._truncate_context_for_reconnection(proactive=True, keep_tool_messages=True)
+                fallback_context = self._context
+
+                await self._drop_connection()
+                self._context = fallback_context
+                await self._start_connecting()
+                if self._context:
+                    await self._handle_context(self._context)
+            else:
+                raise
+
+        self._is_reconnecting = False
+        self._session_start_time = time.time()
+        self._reconnect_attempts = 0
+        logger.info("Proactive session rotation complete, timer reset")
+
+    # Byte-based limits for fallback truncation when Nova rejects the full history.
+    # Generous limits to preserve as much context as possible across rotations.
+    MAX_SINGLE_MESSAGE_BYTES = 4096   # 4 KB per message
+    MAX_CHAT_HISTORY_BYTES = 131072   # 128 KB total conversation history
+
+    def _truncate_context_for_reconnection(self, proactive: bool = False, keep_tool_messages: bool = False):
+        """Prepare context for reconnection.
+
+        The original system prompt is always preserved in full.
+
+        Three modes:
+        - proactive=False (crash recovery): Full system prompt, ZERO conversation.
+          After an 8-minute crash, internal state may be corrupted and any history
+          causes "Chat history over max limit" errors.
+        - proactive=True (clean turn boundary): Full system prompt, keep ALL
+          conversation messages. No truncation — Nova should see the full history
+          so it doesn't lose accumulated state (user identity, registrations, etc.).
+        - proactive=True, keep_tool_messages=True (fallback after "over max limit"):
+          Full system prompt, keep all tool-related messages (which carry state)
+          and fill remaining budget with recent Q&A messages.
 
         Returns the number of messages removed, or 0 if no truncation was needed.
         """
@@ -190,7 +397,6 @@ class NovaSonicLLMServiceWithCompletionSignal(AWSNovaSonicLLMService):
         if not messages:
             return 0
 
-        # Separate system messages from conversation messages
         system_messages = []
         conversation_messages = []
         for msg in messages:
@@ -200,42 +406,127 @@ class NovaSonicLLMServiceWithCompletionSignal(AWSNovaSonicLLMService):
             else:
                 conversation_messages.append(msg)
 
-        # Use a minimal system prompt for reconnection (~300 chars)
-        # This preserves core behavior while fitting within strict limits
-        minimal_system_prompt = """You are a helpful voice assistant for the AI Engineer World's Fair 2025 (June 3-5, San Francisco).
-Answer questions about the conference schedule, sessions, and speakers.
-Be conversational and concise. If you don't have specific information, say so politely."""
-
+        # Always preserve the original system prompt so the model retains
+        # its full knowledge base (schedule, speakers, tools, etc.) after rotation.
         if system_messages:
-            original_content = str(system_messages[0].get("content", ""))
-            original_len = len(original_content)
-            system_messages = [{"role": "system", "content": minimal_system_prompt}]
-            logger.warning(
-                f"Using minimal system prompt for reconnection: {original_len} chars -> {len(minimal_system_prompt)} chars"
+            logger.info(
+                f"Keeping original system prompt for reconnection "
+                f"({len(str(system_messages[0].get('content', '')))} chars)"
             )
 
-        # Keep ZERO conversation messages - Nova Sonic's internal state may be corrupted
-        # after 8-minute timeout, and any conversation history causes "over max limit" errors
-        max_messages = 0
-        if len(conversation_messages) > max_messages:
+        if not proactive:
+            # Crash recovery: keep nothing to avoid "over max limit" errors.
             messages_removed = len(conversation_messages)
-            truncated_conversation = []  # Keep nothing
+            truncated_conversation = [
+                {"role": "user", "content": "Please continue our conversation."}
+            ]
             logger.warning(
-                f"Truncating conversation for reconnection: keeping last {max_messages} messages. "
-                f"Removing {messages_removed} older messages."
+                f"Crash recovery: dropping all {messages_removed} conversation messages, "
+                f"adding primer user message"
+            )
+        elif keep_tool_messages:
+            # Fallback: Nova rejected full history. Keep tool-call messages
+            # (which carry state) and fill remaining budget with recent Q&A.
+            truncation_marker = "... [truncated]"
+            budget = self.MAX_CHAT_HISTORY_BYTES
+
+            def _is_tool_message(msg):
+                role = msg.get("role", "")
+                if role == "tool":
+                    return True
+                if role == "assistant" and msg.get("tool_calls"):
+                    return True
+                return False
+
+            tool_msgs = []
+            qa_msgs = []
+            for msg in conversation_messages:
+                if _is_tool_message(msg):
+                    tool_msgs.append(msg)
+                else:
+                    qa_msgs.append(msg)
+
+            # Always keep all tool messages (cap each at 1KB)
+            kept_tool = []
+            tool_bytes = 0
+            for msg in tool_msgs:
+                content = msg.get("content", "")
+                content_bytes = content.encode("utf-8")
+                if len(content_bytes) > self.MAX_SINGLE_MESSAGE_BYTES:
+                    max_content = self.MAX_SINGLE_MESSAGE_BYTES - len(truncation_marker.encode("utf-8"))
+                    content = content_bytes[:max_content].decode("utf-8", errors="ignore") + truncation_marker
+                    content_bytes = content.encode("utf-8")
+                msg_size = len(content_bytes) + len(msg.get("role", "").encode("utf-8"))
+                kept_tool.append({**msg, "content": content})
+                tool_bytes += msg_size
+
+            # Fill remaining budget with recent Q&A messages
+            remaining_budget = max(0, budget - tool_bytes)
+            kept_qa = []
+            qa_bytes = 0
+            for msg in reversed(qa_msgs):
+                content = msg.get("content", "")
+                content_bytes = content.encode("utf-8")
+                if len(content_bytes) > self.MAX_SINGLE_MESSAGE_BYTES:
+                    max_content = self.MAX_SINGLE_MESSAGE_BYTES - len(truncation_marker.encode("utf-8"))
+                    content = content_bytes[:max_content].decode("utf-8", errors="ignore") + truncation_marker
+                    content_bytes = content.encode("utf-8")
+                msg_size = len(content_bytes) + len(msg.get("role", "").encode("utf-8"))
+                if qa_bytes + msg_size > remaining_budget:
+                    break
+                kept_qa.append({**msg, "content": content})
+                qa_bytes += msg_size
+            kept_qa.reverse()
+
+            # Reassemble in original chronological order
+            tool_set = {id(m) for m in tool_msgs}
+            kept_qa_iter = iter(kept_qa)
+            kept_tool_iter = iter(kept_tool)
+            truncated_conversation = []
+            next_qa = next(kept_qa_iter, None)
+            next_tool = next(kept_tool_iter, None)
+            for orig_msg in conversation_messages:
+                if id(orig_msg) in tool_set:
+                    if next_tool is not None:
+                        truncated_conversation.append(next_tool)
+                        next_tool = next(kept_tool_iter, None)
+                else:
+                    if next_qa is not None and next_qa.get("content") == orig_msg.get("content", "")[:len(next_qa.get("content", "").replace(truncation_marker, ""))] + (truncation_marker if truncation_marker in next_qa.get("content", "") else ""):
+                        truncated_conversation.append(next_qa)
+                        next_qa = next(kept_qa_iter, None)
+
+            # Ensure first message is from user
+            while truncated_conversation and truncated_conversation[0].get("role") == "assistant":
+                truncated_conversation.pop(0)
+
+            if not truncated_conversation:
+                truncated_conversation = [{"role": "user", "content": "Please continue our conversation."}]
+
+            messages_removed = len(conversation_messages) - len(truncated_conversation)
+            logger.warning(
+                f"Fallback truncation: keeping {len(kept_tool)} tool + {len(kept_qa)} QA messages "
+                f"({tool_bytes + qa_bytes} bytes), removed {messages_removed}"
             )
         else:
-            messages_removed = 0
-            truncated_conversation = conversation_messages
-            logger.debug(
-                f"Conversation truncation not needed: {len(conversation_messages)} messages "
-                f"<= {max_messages} max"
+            # Proactive rotation: keep ALL messages, no truncation.
+            # The model should see its full conversation history.
+            total_bytes = sum(
+                len(msg.get("content", "").encode("utf-8")) + len(msg.get("role", "").encode("utf-8"))
+                for msg in conversation_messages
             )
 
-        # Rebuild: minimal system + recent conversation
-        new_messages = system_messages + truncated_conversation
+            # Ensure first message is from user
+            truncated_conversation = list(conversation_messages)
+            while truncated_conversation and truncated_conversation[0].get("role") == "assistant":
+                truncated_conversation.pop(0)
 
-        # Update the context with truncated messages
+            messages_removed = len(conversation_messages) - len(truncated_conversation)
+            logger.warning(
+                f"Proactive rotation: keeping ALL {len(truncated_conversation)} messages "
+                f"({total_bytes} bytes), removed {messages_removed} leading assistant msgs"
+            )
+
+        new_messages = system_messages + truncated_conversation
         self._context.set_messages(new_messages)
         return messages_removed
 
@@ -251,6 +542,15 @@ Be conversational and concise. If you don't have specific information, say so po
         3. Preserves trigger state - re-triggers assistant response after reconnection
         4. Callbacks - notifies external components to pause/resume audio input
         """
+        # Skip if a proactive rotation is already handling reconnection --
+        # closed-stream errors during disconnect are expected and should not
+        # trigger a competing reactive reconnection.
+        if self._is_reconnecting:
+            logger.warning(
+                "Skipping reactive reset_conversation: proactive rotation in progress"
+            )
+            return
+
         # Check retry limit
         if self._reconnect_attempts >= self._max_reconnect_attempts:
             logger.error(
@@ -291,8 +591,12 @@ Be conversational and concise. If you don't have specific information, say so po
 
         # Truncate context to avoid exceeding Nova Sonic's limits during reconnection
         messages_removed = self._truncate_context_for_reconnection()
-        if messages_removed > 0:
-            logger.info(f"Nova Sonic: Removed {messages_removed} old messages before reconnection")
+        remaining = self._context.get_messages() if self._context else []
+        remaining_roles = [m.get("role") for m in remaining]
+        logger.info(
+            f"Nova Sonic: Removed {messages_removed} old messages before reconnection. "
+            f"Remaining {len(remaining)} messages, roles: {remaining_roles}"
+        )
 
         # Notify external components to pause audio input
         if self._on_reconnecting:
@@ -301,15 +605,22 @@ Be conversational and concise. If you don't have specific information, say so po
             except Exception as e:
                 logger.warning(f"Error in on_reconnecting callback: {e}")
 
-        # Call parent implementation (handles disconnect/reconnect/context reload)
+        # Drop the old connection without writing to it (avoids "write to
+        # closed stream" errors), then create a fresh one.
+        saved_context = self._context
         try:
-            await super().reset_conversation()
+            await self._drop_connection()
+            self._context = saved_context
+            await self._start_connecting()
+            if self._context:
+                await self._handle_context(self._context)
         except Exception as e:
-            logger.exception(f"Error in parent reset_conversation: {e}")
+            logger.exception(f"Error in drop-and-reconnect: {e}")
             self._is_reconnecting = False
             raise
 
         self._is_reconnecting = False
+        self._session_start_time = time.time()  # Reset timer after reconnection
 
         # Notify external components reconnection is complete
         if self._on_reconnected:
@@ -831,6 +1142,14 @@ class NovaSonicPipeline:
         self.output_transport = None  # NullAudioOutputTransport for pacing
         self.audio_buffer = None  # AudioBufferProcessor for recording
 
+        # Session transition audio buffer (rolling 3s window of user audio)
+        self._transition_audio_buffer = AudioBuffer(
+            max_duration_seconds=3.0,  # audio_buffer_duration_seconds
+            sample_rate=16000,         # Nova Sonic input rate
+            sample_width=2,            # int16
+        )
+        self._audio_capture: Optional["AudioCaptureProcessor"] = None
+
         # AWS credentials (needed for LLM creation)
         self._aws_access_key_id = os.getenv("AWS_ACCESS_KEY_ID")
         self._aws_secret_access_key = os.getenv("AWS_SECRET_ACCESS_KEY")
@@ -905,8 +1224,8 @@ class NovaSonicPipeline:
         from pipecat.processors.aggregators.llm_context import LLMContext
         from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
 
-        from audio_arena.processors.tool_call_recorder import ToolCallRecorder
-        from audio_arena.transports.paced_input import PacedInputTransport
+        from multi_turn_eval.processors.tool_call_recorder import ToolCallRecorder
+        from multi_turn_eval.transports.paced_input import PacedInputTransport
 
         self.recorder = recorder
         self.model_name = model
@@ -948,6 +1267,7 @@ class NovaSonicPipeline:
             system_instruction=nova_sonic_system_instruction,
             tools=tools,
             endpointing_sensitivity="HIGH",  # Quick cutoff for faster responses
+            max_reconnect_attempts=10,  # More retries for 75-turn long runs
         )
 
         # Register function handler
@@ -1071,6 +1391,65 @@ class NovaSonicPipeline:
             self._tool_response_idx = 0
 
             if self.turn_idx < len(self.effective_turns):
+                # Proactive session rotation before queuing next turn
+                session_age = time.time() - self.llm._session_start_time
+                logger.warning(
+                    f"[ROTATION CHECK] turn={self.turn_idx} session_age={session_age:.0f}s "
+                    f"threshold={self.llm.PROACTIVE_ROTATION_THRESHOLD_SECONDS}s "
+                    f"needs_rotation={self.llm.needs_proactive_rotation()} "
+                    f"is_reconnecting={self.llm._is_reconnecting}"
+                )
+                if self.llm.needs_proactive_rotation():
+                    session_age = time.time() - self.llm._session_start_time
+                    logger.info(
+                        f"Proactive session rotation at turn {self.turn_idx} boundary "
+                        f"(session age: {session_age:.0f}s)..."
+                    )
+                    # Pause capture + input during rotation
+                    if self._audio_capture:
+                        self._audio_capture.pause_capture()
+                    self.paced_input.pause()
+                    self.turn_gate.reset_for_reconnection()
+                    self._turn_reconnection_count += 1
+
+                    # Snapshot buffered audio before rotation clears state
+                    buffered_audio = self._transition_audio_buffer.get_concatenated()
+                    buffered_dur = self._transition_audio_buffer.duration_seconds
+                    logger.info(
+                        f"Captured {buffered_dur:.2f}s of buffered user audio "
+                        f"({len(buffered_audio)} bytes) for replay"
+                    )
+
+                    try:
+                        await self.llm.proactive_session_rotation()
+                        await asyncio.sleep(2.0)
+                        logger.info("Proactive rotation complete, resuming evaluation")
+                    except Exception as e:
+                        logger.error(
+                            f"Proactive rotation failed: {e}. "
+                            f"Pipeline may be in broken state."
+                        )
+
+                    # Clear the buffer and resume capture
+                    self._transition_audio_buffer.clear()
+                    if self._audio_capture:
+                        self._audio_capture.resume_capture()
+                    self.paced_input.signal_ready()
+                    self.turn_gate.clear_pending()
+
+                    # Replay buffered audio to the fresh session so the new
+                    # session's VAD / context is primed with recent user audio.
+                    if buffered_audio:
+                        logger.info(
+                            f"Replaying {buffered_dur:.2f}s of buffered audio "
+                            f"to new session"
+                        )
+                        self.paced_input.enqueue_bytes(
+                            buffered_audio,
+                            num_channels=1,
+                            sample_rate=16000,
+                        )
+
                 actual_idx = self._get_actual_turn_index(self.turn_idx)
                 self.recorder.start_turn(actual_idx)
                 logger.info(f"Starting turn {self.turn_idx}: {self._get_current_turn()['input'][:50]}...")
@@ -1136,6 +1515,7 @@ class NovaSonicPipeline:
             TransportParams(
                 audio_out_enabled=True,
                 audio_out_sample_rate=24000,  # Nova Sonic output is 24kHz
+                audio_out_10ms_chunks=1,
             )
         )
 
@@ -1207,14 +1587,27 @@ class NovaSonicPipeline:
         self._interrupted_turn_text = ""
         self._was_responding_at_disconnect = False
         self._turn_reconnection_count = 0
+        self._reconnect_buffered_audio = b""
 
         # Set up reconnection callbacks
         def on_reconnecting():
             logger.info("Reconnection starting: pausing audio input and resetting turn gate")
+            # Pause audio capture and input
+            if self._audio_capture:
+                self._audio_capture.pause_capture()
             self.paced_input.pause()
 
-            # Capture accumulated text BEFORE reset - capture if ANY text accumulated,
-            # not just when response_active is True (fixes text loss during early reconnection)
+            # Snapshot the audio buffer for potential replay after reconnection
+            self._reconnect_buffered_audio = self._transition_audio_buffer.get_concatenated()
+            buffered_dur = self._transition_audio_buffer.duration_seconds
+            if self._reconnect_buffered_audio:
+                logger.info(
+                    f"Captured {buffered_dur:.2f}s of buffered user audio "
+                    f"({len(self._reconnect_buffered_audio)} bytes) for crash-recovery replay"
+                )
+            self._transition_audio_buffer.clear()
+
+            # Capture accumulated text BEFORE reset
             accumulated_text = self.turn_gate._response_text or ""
             self._was_responding_at_disconnect = (
                 self.turn_gate._response_active
@@ -1235,66 +1628,70 @@ class NovaSonicPipeline:
             self._turn_reconnection_count += 1
 
         def on_reconnected():
-            logger.info("Reconnection complete: waiting 2s before resuming audio")
+            logger.info("Reconnection complete: scheduling delayed resume on main loop")
             import threading
-            import asyncio
+
+            # Capture the MAIN event loop so the thread can schedule async
+            # work back onto it (new_event_loop would silently break pipecat).
+            main_loop = asyncio.get_event_loop()
 
             def delayed_resume():
-                import time
+                import time as _time
 
-                time.sleep(2.0)
+                _time.sleep(2.0)
                 logger.info("Delayed audio resume: signaling ready now")
+
+                # These are thread-safe sync calls
+                if self._audio_capture:
+                    self._audio_capture.resume_capture()
                 self.paced_input.signal_ready()
 
-                # If we were mid-response when disconnected, we need to:
-                # 1. Complete the interrupted turn (with whatever text was collected)
-                # 2. This will trigger _queue_next_turn() to queue the next turn's audio
+                # Replay buffered audio to the fresh session
+                buffered = getattr(self, '_reconnect_buffered_audio', b'')
+                if buffered:
+                    buf_dur = len(buffered) / (16000 * 2)
+                    logger.info(
+                        f"Replaying {buf_dur:.2f}s of buffered audio after crash recovery"
+                    )
+                    self.paced_input.enqueue_bytes(
+                        buffered, num_channels=1, sample_rate=16000
+                    )
+                    self._reconnect_buffered_audio = b''
+
+                _time.sleep(0.5)
+
+                # Schedule async pipeline work back onto the MAIN event loop.
                 if self._was_responding_at_disconnect:
+                    text = self._interrupted_turn_text or "[Turn interrupted by reconnection]"
                     logger.warning(
                         f"Handling interrupted turn {self.turn_idx} after reconnection. "
                         f"Text captured: {len(self._interrupted_turn_text)} chars"
                     )
-                    time.sleep(0.5)  # Small delay to let signal_ready settle
-
-                    # Bridge to async: run end_of_turn in a new event loop
-                    text = self._interrupted_turn_text or "[Turn interrupted by 8-minute reconnection]"
-
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
+                    fut = asyncio.run_coroutine_threadsafe(end_of_turn(text), main_loop)
                     try:
-                        loop.run_until_complete(end_of_turn(text))
+                        fut.result(timeout=30)
                         logger.info(f"Successfully advanced to turn {self.turn_idx} after interrupted turn")
                     except Exception as e:
                         logger.error(f"Error handling interrupted turn: {e}")
-                    finally:
-                        loop.close()
 
-                    # Reset state
                     self._was_responding_at_disconnect = False
                     self._interrupted_turn_text = ""
                 else:
-                    # We weren't mid-response, but we may have queued audio that was lost
-                    # during reconnection (paced_input.pause() clears the queue).
-                    # Re-queue the current turn's audio if we haven't completed it yet.
-                    if self.turn_idx < len(self.turns):
+                    if self.turn_idx < len(self.effective_turns):
                         logger.info(
                             f"Re-queuing turn {self.turn_idx} after reconnection "
                             f"(was not mid-response)"
                         )
-                        time.sleep(0.5)  # Small delay to let signal_ready settle
-
-                        # Bridge to async: run _queue_next_turn in a new event loop
-                        loop = asyncio.new_event_loop()
-                        asyncio.set_event_loop(loop)
+                        fut = asyncio.run_coroutine_threadsafe(
+                            self._requeue_current_turn(), main_loop
+                        )
                         try:
-                            loop.run_until_complete(self._requeue_current_turn())
+                            fut.result(timeout=30)
                             logger.info(
                                 f"Successfully re-queued turn {self.turn_idx} after reconnection"
                             )
                         except Exception as e:
                             logger.error(f"Error re-queuing turn after reconnection: {e}")
-                        finally:
-                            loop.close()
 
             threading.Thread(target=delayed_resume, daemon=True).start()
 
@@ -1320,14 +1717,20 @@ class NovaSonicPipeline:
         def duplicate_ids_accessor():
             return self._duplicate_tool_call_ids
 
+        # Audio capture processor: sits between paced_input and the LLM to
+        # maintain a rolling 3s window of user audio for transition replay.
+        self._audio_capture = AudioCaptureProcessor(self._transition_audio_buffer)
+
         # Build pipeline
         # Structure mirrors the realtime pipeline:
+        # - _audio_capture captures user audio into rolling buffer for transitions
         # - turn_gate accumulates text and waits for BotStoppedSpeakingFrame
         # - output_transport paces audio and generates BotStoppedSpeakingFrame
         # - audio_buffer records the audio after pacing
         pipeline = Pipeline(
             [
                 self.paced_input,
+                self._audio_capture,
                 self.context_aggregator.user(),
                 self.llm,
                 ToolCallRecorder(recorder_accessor, duplicate_ids_accessor),
@@ -1340,7 +1743,7 @@ class NovaSonicPipeline:
 
         self.task = PipelineTask(
             pipeline,
-            idle_timeout_secs=120,  # Longer timeout for Nova Sonic's delayed responses and reconnection
+            idle_timeout_secs=300,  # 5 min: generous for reconnection + slow responses
             idle_timeout_frames=(TTSAudioRawFrame, TTSTextFrame, InputAudioRawFrame, MetricsFrame),
             params=PipelineParams(
                 enable_metrics=True,
