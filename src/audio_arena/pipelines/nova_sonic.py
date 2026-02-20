@@ -213,6 +213,7 @@ class NovaSonicLLMServiceWithCompletionSignal(AWSNovaSonicLLMService):
         self._reconnect_attempts = 0
         self._is_reconnecting = False
         self._need_retrigger_after_reconnect = False
+        self._last_receive_error: Optional[str] = None
         self._on_reconnecting = on_reconnecting
         self._on_reconnected = on_reconnected
         self._on_retriggered = on_retriggered
@@ -315,9 +316,9 @@ class NovaSonicLLMServiceWithCompletionSignal(AWSNovaSonicLLMService):
         the full conversation history so the model doesn't lose accumulated state.
 
         Pattern: drop old connection → create fresh connection → replay context.
-        If Nova rejects the full history ("Chat history over max limit"), retries
-        with smart truncation that keeps tool-call messages (state-carrying) and
-        drops old Q&A text.
+        Nova may reject the context asynchronously via the receive task with
+        "Chat history over max limit".  We wait briefly after replay to detect
+        this and retry with progressively less context.
         """
         elapsed = time.time() - self._session_start_time
         logger.info(
@@ -327,42 +328,75 @@ class NovaSonicLLMServiceWithCompletionSignal(AWSNovaSonicLLMService):
         )
 
         self._is_reconnecting = True
+        self._last_receive_error = None
 
-        # Save full context, prepare with minimal system prompt but keep ALL messages
         saved_context = self._context
-        self._truncate_context_for_reconnection(proactive=True)
-        full_context = self._context
 
-        # Drop the old connection without writing to it
-        await self._drop_connection()
+        # Progressive strategy: try full context, then tool-priority, then minimal
+        strategies = [
+            ("full-context", True, False),       # proactive=True, keep_tool_messages=False (keeps ALL)
+            ("tool-priority", True, True),        # proactive=True, keep_tool_messages=True
+            ("zero-context", False, False),       # proactive=False (system prompt only)
+        ]
 
-        # Restore context and try connecting with full history
-        self._context = full_context
-        try:
-            await self._start_connecting()
-            if self._context:
-                await self._handle_context(self._context)
-        except Exception as e:
-            error_msg = str(e).lower()
-            if "max limit" in error_msg or "over max" in error_msg or "too large" in error_msg:
-                logger.warning(
-                    f"Full context rejected by Nova ({e}). "
-                    f"Retrying with smart truncation (keeping tool messages)..."
-                )
-                # Restore saved context and re-truncate with tool-priority fallback
-                self._context = saved_context
+        rotation_succeeded = False
+        for strategy_name, proactive, keep_tools in strategies:
+            self._context = saved_context
+            self._last_receive_error = None
+
+            if keep_tools:
                 self._truncate_context_for_reconnection(proactive=True, keep_tool_messages=True)
-                fallback_context = self._context
+            else:
+                self._truncate_context_for_reconnection(proactive=proactive)
 
+            remaining = self._context.get_messages() if self._context else []
+            logger.info(
+                f"Proactive rotation strategy '{strategy_name}': "
+                f"{len(remaining)} messages to replay"
+            )
+
+            try:
                 await self._drop_connection()
-                self._context = fallback_context
                 await self._start_connecting()
                 if self._context:
                     await self._handle_context(self._context)
-            else:
+            except Exception as e:
+                logger.warning(
+                    f"Proactive rotation strategy '{strategy_name}' raised sync error: {e}"
+                )
+                if strategy_name != strategies[-1][0]:
+                    continue
                 raise
 
+            # Nova rejects context asynchronously via the receive task.
+            # Wait briefly and check if the receive task reported ANY error
+            # (not just overflow — "Invalid input request" etc. also kill the connection).
+            await asyncio.sleep(1.0)
+            if self._last_receive_error:
+                logger.warning(
+                    f"Proactive rotation strategy '{strategy_name}' rejected by Nova: "
+                    f"{self._last_receive_error!r}. Trying next strategy..."
+                )
+                self._last_receive_error = None
+                continue
+
+            # Success — no error detected
+            logger.info(
+                f"Proactive rotation strategy '{strategy_name}' succeeded"
+            )
+            rotation_succeeded = True
+            break
+
         self._is_reconnecting = False
+        self._last_receive_error = None
+
+        if not rotation_succeeded:
+            logger.error(
+                "All proactive rotation strategies failed. "
+                "Raising to let caller attempt reactive recovery."
+            )
+            raise RuntimeError("All proactive rotation strategies exhausted")
+
         self._session_start_time = time.time()
         self._reconnect_attempts = 0
         logger.info("Proactive session rotation complete, timer reset")
@@ -446,7 +480,7 @@ class NovaSonicLLMServiceWithCompletionSignal(AWSNovaSonicLLMService):
                 else:
                     qa_msgs.append(msg)
 
-            # Always keep all tool messages (cap each at 1KB)
+            # Always keep all tool messages (cap each at 4KB)
             kept_tool = []
             tool_bytes = 0
             for msg in tool_msgs:
@@ -530,6 +564,11 @@ class NovaSonicLLMServiceWithCompletionSignal(AWSNovaSonicLLMService):
         self._context.set_messages(new_messages)
         return messages_removed
 
+    def _is_context_overflow_error(self, error_msg: Optional[str] = None) -> bool:
+        """Check if the error is a Nova Sonic context overflow ("Chat history over max limit")."""
+        msg = (error_msg or self._last_receive_error or "").lower()
+        return "max limit" in msg or "over max" in msg or "too large" in msg
+
     async def reset_conversation(self):
         """Override to add retry limits, context truncation, and preserve trigger state.
 
@@ -538,7 +577,8 @@ class NovaSonicLLMServiceWithCompletionSignal(AWSNovaSonicLLMService):
 
         Key improvements:
         1. Retry limits - gives up after max_reconnect_attempts
-        2. Context truncation - removes old messages to fit within Nova Sonic limits
+        2. Progressive context truncation - for "over max limit" errors, tries
+           tool-priority truncation before falling back to zero context
         3. Preserves trigger state - re-triggers assistant response after reconnection
         4. Callbacks - notifies external components to pause/resume audio input
         """
@@ -575,8 +615,10 @@ class NovaSonicLLMServiceWithCompletionSignal(AWSNovaSonicLLMService):
         self._reconnect_attempts += 1
         self._is_reconnecting = True
 
+        is_overflow = self._is_context_overflow_error()
         logger.warning(
-            f"Nova Sonic reset_conversation() attempt {self._reconnect_attempts}/{self._max_reconnect_attempts}"
+            f"Nova Sonic reset_conversation() attempt {self._reconnect_attempts}/{self._max_reconnect_attempts} "
+            f"(context_overflow={is_overflow}, error={self._last_receive_error!r})"
         )
 
         # Remember if we need to re-trigger after reconnection
@@ -589,15 +631,6 @@ class NovaSonicLLMServiceWithCompletionSignal(AWSNovaSonicLLMService):
             f"(triggering={self._triggering_assistant_response}, responding={self._assistant_is_responding})"
         )
 
-        # Truncate context to avoid exceeding Nova Sonic's limits during reconnection
-        messages_removed = self._truncate_context_for_reconnection()
-        remaining = self._context.get_messages() if self._context else []
-        remaining_roles = [m.get("role") for m in remaining]
-        logger.info(
-            f"Nova Sonic: Removed {messages_removed} old messages before reconnection. "
-            f"Remaining {len(remaining)} messages, roles: {remaining_roles}"
-        )
-
         # Notify external components to pause audio input
         if self._on_reconnecting:
             try:
@@ -605,21 +638,66 @@ class NovaSonicLLMServiceWithCompletionSignal(AWSNovaSonicLLMService):
             except Exception as e:
                 logger.warning(f"Error in on_reconnecting callback: {e}")
 
-        # Drop the old connection without writing to it (avoids "write to
-        # closed stream" errors), then create a fresh one.
+        # Save full context before any truncation — we may need to retry
+        # with different truncation levels.
         saved_context = self._context
-        try:
-            await self._drop_connection()
+
+        # Progressive truncation strategy for "over max limit" errors:
+        #   1. tool-priority truncation (keep tool messages + recent Q&A)
+        #   2. zero context (last resort)
+        # For other errors (server crash, stream failure), go straight to
+        # tool-priority since the issue isn't context size.
+        if is_overflow:
+            truncation_strategies = [
+                ("tool-priority", True, True),    # (label, proactive, keep_tool_messages)
+                ("zero-context", False, False),   # nuclear fallback
+            ]
+        else:
+            truncation_strategies = [
+                ("tool-priority", True, True),
+                ("zero-context", False, False),
+            ]
+
+        connected = False
+        for strategy_name, proactive, keep_tools in truncation_strategies:
             self._context = saved_context
-            await self._start_connecting()
-            if self._context:
-                await self._handle_context(self._context)
-        except Exception as e:
-            logger.exception(f"Error in drop-and-reconnect: {e}")
+            if proactive and keep_tools:
+                messages_removed = self._truncate_context_for_reconnection(
+                    proactive=True, keep_tool_messages=True
+                )
+            else:
+                messages_removed = self._truncate_context_for_reconnection(proactive=False)
+
+            remaining = self._context.get_messages() if self._context else []
+            remaining_roles = [m.get("role") for m in remaining]
+            logger.info(
+                f"Nova Sonic: Strategy '{strategy_name}': removed {messages_removed} messages. "
+                f"Remaining {len(remaining)} messages, roles: {remaining_roles}"
+            )
+
+            try:
+                await self._drop_connection()
+                self._context = self._context  # keep current truncated context
+                await self._start_connecting()
+                if self._context:
+                    await self._handle_context(self._context)
+                connected = True
+                logger.info(f"Nova Sonic: Strategy '{strategy_name}' succeeded")
+                break
+            except Exception as e:
+                logger.warning(
+                    f"Nova Sonic: Strategy '{strategy_name}' failed: {e}. "
+                    f"Trying next strategy..."
+                )
+                continue
+
+        if not connected:
+            logger.error("Nova Sonic: All truncation strategies failed")
             self._is_reconnecting = False
-            raise
+            raise RuntimeError("All reconnection strategies exhausted")
 
         self._is_reconnecting = False
+        self._last_receive_error = None
         self._session_start_time = time.time()  # Reset timer after reconnection
 
         # Notify external components reconnection is complete
@@ -728,6 +806,7 @@ class NovaSonicLLMServiceWithCompletionSignal(AWSNovaSonicLLMService):
                 logger.debug(f"NovaSonicLLM: _receive_task_handler exception during disconnect: {e}")
                 return
             logger.error(f"NovaSonicLLM: Error in receive task: {e}")
+            self._last_receive_error = str(e)
             await self.push_error(error_msg=f"Error processing responses: {e}", exception=e)
             if self._wants_connection:
                 await self.reset_conversation()
@@ -1034,7 +1113,9 @@ class NovaSonicTurnGate(FrameProcessor):
         if isinstance(frame, LLMFullResponseStartFrame):
             self._response_active = True
             self._waiting_for_response = False
-            self._response_text = ""
+            # Do NOT reset _response_text here — speculative text may already
+            # have been accumulated before this frame arrives.  Text is cleared
+            # in signal_trigger_sent() at the start of each turn instead.
             self._audio_frame_count = 0
             # Cancel response timeout since we got a response
             if self._response_timeout_task and not self._response_timeout_task.done():
@@ -1427,28 +1508,24 @@ class NovaSonicPipeline:
                     except Exception as e:
                         logger.error(
                             f"Proactive rotation failed: {e}. "
-                            f"Pipeline may be in broken state."
+                            f"Falling back to reactive reset_conversation()."
                         )
+                        try:
+                            await self.llm.reset_conversation()
+                            await asyncio.sleep(2.0)
+                            logger.info("Reactive fallback after proactive failure succeeded")
+                        except Exception as e2:
+                            logger.error(f"Reactive fallback also failed: {e2}")
 
-                    # Clear the buffer and resume capture
+                    # Clear the buffer and resume capture.
+                    # Do NOT replay buffered audio for proactive rotation —
+                    # it causes false "user speaking" interruptions in the
+                    # fresh session.  Buffer replay is only for crash recovery.
                     self._transition_audio_buffer.clear()
                     if self._audio_capture:
                         self._audio_capture.resume_capture()
                     self.paced_input.signal_ready()
                     self.turn_gate.clear_pending()
-
-                    # Replay buffered audio to the fresh session so the new
-                    # session's VAD / context is primed with recent user audio.
-                    if buffered_audio:
-                        logger.info(
-                            f"Replaying {buffered_dur:.2f}s of buffered audio "
-                            f"to new session"
-                        )
-                        self.paced_input.enqueue_bytes(
-                            buffered_audio,
-                            num_channels=1,
-                            sample_rate=16000,
-                        )
 
                 actual_idx = self._get_actual_turn_index(self.turn_idx)
                 self.recorder.start_turn(actual_idx)
