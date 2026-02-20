@@ -1,0 +1,148 @@
+
+# Harvest & Hearth Market
+
+## Overview
+Harvest & Hearth Market is a specialty grocery and artisan bakery in Pasadena, California. We take phone orders for delivery and in-store pickup. We carry locally sourced produce, baked goods, pantry staples, and gourmet specialty items.
+
+## Location & Contact
+- **Address:** 710 Mariposa Avenue, Pasadena, CA 91101
+- **Phone:** (626) 555-0274
+- **Email:** orders@harvestandhearth.com
+- **Website:** www.harvestandhearth.com
+
+## Store Hours
+- Monday: 7:00 AM – 8:00 PM
+- Tuesday: 7:00 AM – 8:00 PM
+- Wednesday: 7:00 AM – 8:00 PM
+- Thursday: 7:00 AM – 8:00 PM
+- Friday: 7:00 AM – 9:00 PM
+- Saturday: 8:00 AM – 9:00 PM
+- Sunday: 8:00 AM – 6:00 PM
+
+## Product Catalog
+
+### Baking & Pantry Staples
+
+| Item # | Product                    | Size / Qty       | Price   |
+|--------|----------------------------|------------------|---------|
+| 1010   | All-Purpose Flour          | 5 lb bag         | $6.99   |
+| 1015   | Bread Flour                | 5 lb bag         | $7.49   |
+| 1020   | Granulated Sugar           | 4 lb bag         | $5.49   |
+| 1025   | Brown Sugar                | 2 lb bag         | $4.29   |
+| 1030   | Baking Powder              | 8 oz can         | $3.99   |
+| 1035   | Vanilla Extract (pure)     | 4 oz bottle      | $11.99  |
+| 1330   | Maple Syrup (Grade A)      | 12 oz bottle     | $9.99   |
+| 1303   | Maple Candy                | 6 oz box         | $13.99  |
+
+### Dairy & Cheese
+
+| Item # | Product                    | Size / Qty       | Price   |
+|--------|----------------------------|------------------|---------|
+| 2010   | Organic Whole Milk         | 1 gallon         | $6.99   |
+| 2015   | Organic Eggs               | 1 dozen          | $6.49   |
+| 2020   | Unsalted Butter            | 1 lb             | $5.99   |
+| 2025   | Grey Goose Cheese          | 6 oz wedge       | $12.99  |
+| 2030   | Sharp Cheddar              | 8 oz block       | $7.49   |
+| 2035   | Fresh Mozzarella           | 8 oz ball        | $6.99   |
+
+### Spices & Seasonings
+
+| Item # | Product                    | Size / Qty       | Price   |
+|--------|----------------------------|------------------|---------|
+| 3010   | Gray Sea Salt              | 8 oz jar         | $8.49   |
+| 3015   | Black Peppercorns          | 4 oz jar         | $6.99   |
+| 3020   | Italian Seasoning          | 3 oz jar         | $5.99   |
+| 3025   | Smoked Paprika             | 3 oz jar         | $5.49   |
+| 3030   | Ground Cinnamon            | 4 oz jar         | $4.99   |
+| 3035   | Ground Cumin               | 3 oz jar         | $4.49   |
+
+### Oils & Condiments
+
+| Item # | Product                    | Size / Qty       | Price   |
+|--------|----------------------------|------------------|---------|
+| 4015   | Extra Virgin Olive Oil     | 16 oz bottle     | $12.99  |
+| 4051   | Kalamata Olives            | 10 oz jar        | $8.49   |
+| 4020   | Balsamic Vinegar           | 8 oz bottle      | $9.99   |
+| 4025   | Dijon Mustard              | 8 oz jar         | $4.49   |
+| 4030   | Raw Honey                  | 12 oz jar        | $10.99  |
+
+### Bakery
+
+| Item # | Product                    | Size / Qty       | Price   |
+|--------|----------------------------|------------------|---------|
+| 5010   | Sourdough Loaf             | 1 loaf           | $7.50   |
+| 5015   | Sourdough Rolls            | pack of 6        | $5.50   |
+| 5020   | Multigrain Bread           | 1 loaf           | $6.99   |
+| 5025   | Chocolate Croissants       | pack of 4        | $9.99   |
+| 5030   | Cinnamon Raisin Bagels     | pack of 6        | $7.49   |
+
+### Produce
+
+| Item # | Product                    | Size / Qty       | Price   |
+|--------|----------------------------|------------------|---------|
+| 6010   | Honey Crisp Apples         | per lb           | $3.99   |
+| 6015   | Organic Bananas            | per lb           | $0.99   |
+| 6020   | Italian Parsley            | 1 bunch          | $2.49   |
+| 6025   | Fresh Basil                | 1 bunch          | $2.99   |
+| 6030   | Avocados (Hass)            | each             | $2.49   |
+| 6035   | Roma Tomatoes              | per lb           | $2.99   |
+
+### Snacks & Dry Goods
+
+| Item # | Product                    | Size / Qty       | Price   |
+|--------|----------------------------|------------------|---------|
+| 7010   | Honey Graham Crackers      | 14 oz box        | $4.99   |
+| 7015   | Organic Egg Noodles        | 16 oz bag        | $4.29   |
+| 7020   | Trail Mix                  | 12 oz bag        | $7.99   |
+| 7025   | Dried Cranberries          | 8 oz bag         | $5.49   |
+| 7030   | Rice Crackers              | 6 oz box         | $4.49   |
+
+### Floral
+
+| Item # | Product                    | Size / Qty       | Price   |
+|--------|----------------------------|------------------|---------|
+| 8010   | Fresh Flower Bouquet       | mixed seasonal   | $34.99  |
+| 8015   | Dried Lavender Bundle      | 1 bundle         | $12.99  |
+| 8020   | Potted Herb Garden         | 3-herb set       | $18.99  |
+
+## Confusable Items Reference
+The following items are commonly confused by customers on the phone:
+- **Flour vs Flower:** All-Purpose Flour (#1010, $6.99) vs Fresh Flower Bouquet (#8010, $34.99) — homophones
+- **Gray vs Grey:** Gray Sea Salt (#3010, $8.49) vs Grey Goose Cheese (#2025, $12.99) — spelling/sound
+- **Sourdough Loaf vs Rolls:** Sourdough Loaf (#5010, $7.50) vs Sourdough Rolls (#5015, $5.50) — same product type
+- **Honey Crisp vs Honey Graham:** Honey Crisp Apples (#6010, $3.99/lb) vs Honey Graham Crackers (#7010, $4.99/box) — "honey" prefix
+- **Italian Parsley vs Italian Seasoning:** Italian Parsley (#6020, $2.49/bunch) vs Italian Seasoning (#3020, $5.99/jar) — "Italian" prefix
+- **Organic Eggs vs Organic Egg Noodles:** Organic Eggs (#2015, $6.49/dz) vs Organic Egg Noodles (#7015, $4.29/bag) — "organic egg" prefix
+- **Item #1330 vs #1303:** Maple Syrup (#1330, $9.99) vs Maple Candy (#1303, $13.99) — transposed digits
+- **Item #4015 vs #4051:** Olive Oil (#4015, $12.99) vs Kalamata Olives (#4051, $8.49) — transposed digits
+
+## Delivery Information
+
+### Delivery Zones & Fees
+- **Zone 1 (within 5 miles of store):** $5.99 delivery fee
+- **Zone 2 (5–10 miles):** $8.99 delivery fee
+- **Zone 3 (10–15 miles):** $12.99 delivery fee
+- Orders over $75 qualify for **free delivery** in Zone 1.
+- We do not deliver beyond 15 miles.
+
+### Delivery Times
+- Orders placed before 2:00 PM are eligible for same-day delivery (subject to availability).
+- Standard delivery window: 2–4 hours from order confirmation.
+- Customers may request a preferred delivery window (morning, afternoon, or evening).
+
+### Minimum Order
+- Minimum order for delivery: $25.00
+- No minimum for in-store pickup.
+
+## Payment Accepted
+- Cash (delivery drivers carry change for up to $50)
+- Visa, MasterCard, American Express, Discover
+- Apple Pay, Google Pay (in-store and online)
+- Store gift cards
+- Payment is collected at time of order for card payments, or upon delivery for cash.
+
+## Return & Exchange Policy
+- **Perishable items** (produce, dairy, bakery): Must report issues within 24 hours of delivery. We will issue a full refund or replacement.
+- **Non-perishable items:** May be returned within 7 days with receipt for a full refund or exchange.
+- **Damaged or incorrect items:** Contact us immediately. We will send a replacement at no extra charge or issue a refund.
+- **No returns** on floral items once delivered, unless damaged in transit.
