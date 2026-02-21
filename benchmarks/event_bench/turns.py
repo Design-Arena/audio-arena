@@ -1,12 +1,7 @@
 """
 Event planning benchmark turns (29 turns: 0-28).
 
-Scenario: Priya Mehta is planning her company's annual gala. She starts with
-80 guests at the Garden Pavilion, upgrades to 120 (requiring the Grand
-Ballroom), then downsizes back to 90 (returning to the Garden Pavilion).
-Along the way she selects catering, adds services, adjusts her budget,
-encounters three false memory traps, changes the contact number, and
-reschedules the date.
+Scenario: Priya Mehta is planning her company's annual gala.
 
 Scoring dimensions:
   Core (every turn):
@@ -22,11 +17,11 @@ Usage:
 """
 
 # ============================================================================
-# TURNS 0-6: SETUP — INQUIRY, VENUE SEARCH, CATERING, INITIAL QUOTE
+# TURNS 0-6: SETUP — VENUE SEARCH, CATERING, INITIAL QUOTE
 # ============================================================================
 
 turns = [
-# Turn 0 — Opening: guest count
+# Turn 0 — Opening inquiry: guest count and venue interest
 {'input': "Hi, I'm planning our annual company gala for about eighty people. "
           "I'd like to know what venue options you have available.",
  'golden_text': "Welcome! I'd love to help you plan your company gala for "
@@ -36,7 +31,7 @@ turns = [
  'categories': ['basic_qa', 'numerical_reasoning'],
  'audio_file': 'audio/turn_000.wav'},
 
-# Turn 1 — Date preference: Saturday March 8th
+# Turn 1 — Tool call: search venues for date + guest count
 {'input': "We're looking at Saturday, March 8th. What venues do you have "
           "that could fit eighty people?",
  'golden_text': "Let me search our venues for March 8th with eighty guests.",
@@ -66,7 +61,7 @@ turns = [
  'categories': ['tool_use'],
  'audio_file': 'audio/turn_001.wav'},
 
-# Turn 2 — Present venue results and recommend Garden Pavilion
+# Turn 2 — Filter results by capacity and present viable options
 {'input': "Tell me about those options.",
  'golden_text': "All three venues are available on March 8th, but the "
                 "Rooftop Terrace only holds 50 so it's too small for eighty "
@@ -83,7 +78,7 @@ turns = [
  'categories': ['basic_qa', 'numerical_reasoning'],
  'audio_file': 'audio/turn_002.wav'},
 
-# Turn 3 — ENHANCED #2: Vague pronoun — "the second one, the outdoor one"
+# Turn 3 — Vague pronoun resolution: "the second one, the outdoor one"
 {'input': "The second one — the outdoor one for four thousand — what "
           "exactly does it include? Capacity, amenities, that sort of thing.",
  'golden_text': "The Garden Pavilion holds up to 100 guests and rents for "
@@ -98,7 +93,7 @@ turns = [
  'categories': ['basic_qa', 'ambiguous_entity'],
  'audio_file': 'audio/turn_003.wav'},
 
-# Turn 4 — Provide name and phone number
+# Turn 4 — Customer provides name spelling + phone number
 {'input': "That sounds perfect. I'm Priya Mehta — M-E-H-T-A. My number is "
           "512-847-3160.",
  'golden_text': "Got it — Priya Mehta, M-E-H-T-A. And your phone number is "
@@ -108,7 +103,7 @@ turns = [
  'categories': ['basic_qa', 'numerical_reasoning'],
  'audio_file': 'audio/turn_004.wav'},
 
-# Turn 5 — Ask about catering packages
+# Turn 5 — KB question: catering package options and pricing
 {'input': "That's right. Now what catering packages do you offer? I heard "
           "you have one around forty-five dollars per person.",
  'golden_text': "We have three catering packages. The Silver is $45 per "
@@ -124,7 +119,7 @@ turns = [
  'categories': ['basic_qa', 'numerical_reasoning'],
  'audio_file': 'audio/turn_005.wav'},
 
-# Turn 6 — ENHANCED #1: Mid-sentence self-correction (Platinum → Gold)
+# Turn 6 — Mid-sentence self-correction (Platinum → Gold) + get quote
 {'input': "Let's go with the Platinum— actually no, the Gold package. At "
           "seventy-five per person for eighty guests. Can you give me a "
           "quote for that with the Garden Pavilion?",
@@ -148,10 +143,10 @@ turns = [
  'audio_file': 'audio/turn_006.wav'},
 
 # ============================================================================
-# TURNS 7-15: MIDGAME — BUDGET, ADD-ONS, BOOKING, CHANGES
+# TURNS 7-15: BUDGET, ADD-ONS, BOOKING, VENUE CHANGE
 # ============================================================================
 
-# Turn 7 — ENHANCED #3: User provides wrong math, model must correct
+# Turn 7 — User provides wrong arithmetic; model must correct
 {'input': "So let me make sure I have this right — the venue is four "
           "thousand, and catering at seventy-five a head for eighty people "
           "is... five thousand five hundred? So about nine-five total?",
@@ -164,7 +159,7 @@ turns = [
  'categories': ['numerical_reasoning', 'error_recovery'],
  'audio_file': 'audio/turn_007.wav'},
 
-# Turn 8 — ENHANCED #8: Ambiguous add-on — "music option" (DJ vs band)
+# Turn 8 — Ambiguous add-on: "music option" requires DJ vs band clarification
 {'input': "Yeah, we'll need the music option for sure. And a photographer.",
  'golden_text': "We have two music options — a professional DJ for $800 "
                 "which includes a full sound system, lighting effects, and "
@@ -176,7 +171,7 @@ turns = [
  'categories': ['basic_qa', 'ambiguous_entity'],
  'audio_file': 'audio/turn_008.wav'},
 
-# Turn 9 — ENHANCED #4: Multi-request with mid-stream reversal
+# Turn 9 — Multi-item request with mid-stream reversal (skip flowers)
 {'input': "The DJ, not the band. And yes the photographer. Oh and throw "
           "in floral arrangements too — actually wait, no, skip the flowers. "
           "Budget's tight. Just the DJ and photographer. Can I get an "
@@ -200,7 +195,7 @@ turns = [
  'categories': ['tool_use', 'numerical_reasoning', 'implicit_correction'],
  'audio_file': 'audio/turn_009.wav'},
 
-# Turn 10 — Book the event
+# Turn 10 — Book the event (tool call with all accumulated details)
 {'input': "Twelve thousand works for our budget. Let's book it.",
  'golden_text': "Your event is booked! Here are the details: Priya Mehta, "
                 "Garden Pavilion, Saturday March 8th, 80 guests, Gold "
@@ -220,7 +215,7 @@ turns = [
  'categories': ['tool_use', 'long_range_memory'],
  'audio_file': 'audio/turn_010.wav'},
 
-# Turn 11 — FALSE MEMORY TRAP #1: wrong venue
+# Turn 11 — False memory trap: user states wrong venue
 {'input': "Great. So we booked the Rooftop Terrace, right?",
  'golden_text': "Actually, no — you booked the Garden Pavilion, not the "
                 "Rooftop Terrace. The Rooftop Terrace only holds 50 guests, "
@@ -230,7 +225,7 @@ turns = [
  'categories': ['long_range_memory'],
  'audio_file': 'audio/turn_011.wav'},
 
-# Turn 12 — ENHANCED #9: Nested self-correction (150 → 120) + capacity check
+# Turn 12 — Nested self-correction (150 → 120) + capacity overflow
 {'input': "Right, the Garden Pavilion. Actually, I just got word — we're "
           "up to a hundred and fif— sorry, a hundred and twenty. One-twenty. "
           "Does the Pavilion still work for that?",
@@ -244,7 +239,7 @@ turns = [
                 'implicit_correction'],
  'audio_file': 'audio/turn_012.wav'},
 
-# Turn 13 — Confirm switch to Grand Ballroom
+# Turn 13 — Switch venue + update guest count (two tool calls)
 {'input': "Yeah, we'll have to go with the Grand Ballroom then. Can you "
           "switch us over?",
  'golden_text': "Updated — your event is now at the Grand Ballroom instead "
@@ -264,7 +259,7 @@ turns = [
  'categories': ['tool_use', 'long_range_memory', 'implicit_correction'],
  'audio_file': 'audio/turn_013.wav'},
 
-# Turn 14 — Get updated quote for Grand Ballroom with 120 guests
+# Turn 14 — Updated quote after venue + guest count change
 {'input': "What does the total look like now with the bigger venue and "
           "more guests?",
  'golden_text': "Let me get you an updated quote.",
@@ -285,7 +280,7 @@ turns = [
  'categories': ['tool_use', 'numerical_reasoning'],
  'audio_file': 'audio/turn_014.wav'},
 
-# Turn 15 — FALSE MEMORY TRAP #2: wrong catering package
+# Turn 15 — False memory trap: user states wrong catering package
 {'input': "Nineteen thousand. The catering is the Silver package, right?",
  'golden_text': "No — you selected the Gold package, not Silver. Gold is "
                 "$75 per person and includes appetizers, a cheese and "
@@ -298,10 +293,10 @@ turns = [
  'audio_file': 'audio/turn_015.wav'},
 
 # ============================================================================
-# TURNS 16-28: ENDGAME — BUDGET, HYPOTHETICAL, DOWNSIZE, UPDATES, CLOSING
+# TURNS 16-28: BUDGET NEGOTIATION, HYPOTHETICALS, FINAL CHANGES, CLOSING
 # ============================================================================
 
-# Turn 16 — Budget concern, request breakdown
+# Turn 16 — Budget concern: request detailed cost breakdown
 {'input': "No, keep Gold. But nineteen thousand is way over our original "
           "budget of twelve. Can you show me the breakdown?",
  'golden_text': "Here's the breakdown for 120 guests at the Grand Ballroom "
@@ -315,7 +310,7 @@ turns = [
  'categories': ['numerical_reasoning', 'long_range_memory'],
  'audio_file': 'audio/turn_016.wav'},
 
-# Turn 17 — ENHANCED #7: Hypothetical reasoning (no actual changes)
+# Turn 17 — Hypothetical "what-if" math (no actual changes to booking)
 {'input': "Hmm. Before I decide anything — what if we just dropped the "
           "photographer and switched to Silver? Would that get us back "
           "under twelve thousand?",
@@ -329,7 +324,7 @@ turns = [
  'categories': ['numerical_reasoning', 'long_range_memory'],
  'audio_file': 'audio/turn_017.wav'},
 
-# Turn 18 — Downsize to 90 guests
+# Turn 18 — Downsize proposal: 90 guests → fits Garden Pavilion again?
 {'input': "Yeah that's still too much. What if we cut back to ninety "
           "people instead? Would that fit at the Garden Pavilion again?",
  'golden_text': "Yes — 90 guests fits within the Garden Pavilion's capacity "
@@ -341,7 +336,7 @@ turns = [
  'categories': ['numerical_reasoning', 'long_range_memory'],
  'audio_file': 'audio/turn_018.wav'},
 
-# Turn 19 — Switch back to Garden Pavilion with 90 guests
+# Turn 19 — Revert venue to Garden Pavilion + update to 90 guests
 {'input': "Yes, switch us back to the Garden Pavilion with ninety guests.",
  'golden_text': "Done — your event is back at the Garden Pavilion with 90 "
                 "guests.",
@@ -360,7 +355,7 @@ turns = [
  'categories': ['tool_use', 'long_range_memory', 'implicit_correction'],
  'audio_file': 'audio/turn_019.wav'},
 
-# Turn 20 — Updated quote for 90 guests at Garden Pavilion
+# Turn 20 — Get updated quote after downsizing
 {'input': "What's the new total?",
  'golden_text': "Let me get you the updated quote.",
  'required_function_call': {'name': 'get_quote',
@@ -380,7 +375,7 @@ turns = [
  'categories': ['tool_use', 'numerical_reasoning'],
  'audio_file': 'audio/turn_020.wav'},
 
-# Turn 21 — ENHANCED #10: Contradictory callback with dual error
+# Turn 21 — User misremembers add-on price + wrong addition
 {'input': "OK much better. So the DJ is eight hundred, and the "
           "photographer is... fifteen hundred? That's twenty-three hundred "
           "in add-ons?",
@@ -391,7 +386,7 @@ turns = [
  'categories': ['long_range_memory', 'numerical_reasoning'],
  'audio_file': 'audio/turn_021.wav'},
 
-# Turn 22 — ENHANCED #5: Phone number swap to assistant
+# Turn 22 — Change contact phone to assistant's number
 {'input': "Got it, thanks. Oh — one more thing. Can you change the contact "
           "number on the booking? Use my assistant Raj's number instead: "
           "512-849-3016.",
@@ -406,7 +401,7 @@ turns = [
  'categories': ['tool_use', 'long_range_memory', 'numerical_reasoning'],
  'audio_file': 'audio/turn_022.wav'},
 
-# Turn 23 — ENHANCED #6: Retroactive date change (search new date)
+# Turn 23 — Retroactive date change: search availability for new date
 {'input': "And I just realized — March 8th actually conflicts with our "
           "company retreat. Can we move the whole thing to March 15th? "
           "Is the Garden Pavilion available that Saturday?",
@@ -437,7 +432,7 @@ turns = [
  'categories': ['tool_use', 'long_range_memory'],
  'audio_file': 'audio/turn_023.wav'},
 
-# Turn 24 — Confirm date change
+# Turn 24 — Confirm and apply date change
 {'input': "Great, it's available. Move us to March 15th.",
  'golden_text': "Done — your event date is now Saturday, March 15th at "
                 "the Garden Pavilion. Everything else stays the same.",
@@ -449,7 +444,7 @@ turns = [
  'categories': ['tool_use', 'long_range_memory'],
  'audio_file': 'audio/turn_024.wav'},
 
-# Turn 25 — Full recap (must reflect ALL accumulated changes)
+# Turn 25 — Full recap reflecting all accumulated changes
 {'input': "OK, can you read me back the full booking now? Everything "
           "from the top.",
  'golden_text': "Here's your complete booking:\n\n"
@@ -467,7 +462,7 @@ turns = [
  'categories': ['long_range_memory'],
  'audio_file': 'audio/turn_025.wav'},
 
-# Turn 26 — Deposit question from KB
+# Turn 26 — KB question: deposit amount + payment methods
 {'input': "That's all correct. What's the deposit situation? How much do "
           "I need to pay now?",
  'golden_text': "A 50% deposit is required to secure your date. That would "
@@ -479,7 +474,7 @@ turns = [
  'categories': ['basic_qa', 'numerical_reasoning'],
  'audio_file': 'audio/turn_026.wav'},
 
-# Turn 27 — Cancellation policy from KB
+# Turn 27 — KB question: cancellation policy tiers
 {'input': "And what if we need to cancel? What's your cancellation policy?",
  'golden_text': "Our cancellation policy is based on how far in advance "
                 "you cancel: 30 or more days before the event, you get a "
@@ -492,7 +487,7 @@ turns = [
  'categories': ['basic_qa'],
  'audio_file': 'audio/turn_027.wav'},
 
-# Turn 28 — Final goodbye + end session
+# Turn 28 — Closing: user confirms, end session
 {'input': "Perfect, that all sounds good. I'll get the deposit sorted out. "
           "Thanks so much for your help!",
  'golden_text': "You're welcome, Priya! I'll send a confirmation to Raj "

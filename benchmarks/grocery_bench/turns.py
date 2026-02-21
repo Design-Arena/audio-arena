@@ -2,9 +2,7 @@
 Grocery benchmark turns (30 turns: 0-29).
 
 Scenario: Carmen Reyes calls Harvest & Hearth Market to place a grocery
-delivery order. The conversation tests error detection, correction handling,
-state tracking across quantity/removal/swap changes, and final order
-reconciliation across a wide range of difficulty enhancements.
+delivery order. 
 
 Scoring dimensions:
   Core (every turn):
@@ -21,7 +19,7 @@ Scoring dimensions:
 # ============================================================================
 
 turns = [
-# Turn 0 — Initial call: delivery order request
+# Turn 0 — Opening: customer requests a delivery order
 {'input': "Hi, I'd like to place an order for delivery please.",
  'golden_text': "Of course! I'd be happy to help you place a delivery order. "
                 "Can I get your name, delivery address, and phone number to "
@@ -31,7 +29,7 @@ turns = [
  'categories': ['basic_qa'],
  'audio_file': 'audio/turn_000.wav'},
 
-# Turn 1 — Customer details: name + address + phone
+# Turn 1 — Name spelling + delivery address + phone number
 {'input': "My name is Carmen Reyes — that's C-A-R-M-E-N Carmen, "
           "R-E-Y-E-S Reyes. Delivery to 3840 Willow Lane, Pasadena. "
           "Phone is 818-940-3617.",
@@ -43,7 +41,7 @@ turns = [
  'categories': ['basic_qa', 'numerical_reasoning'],
  'audio_file': 'audio/turn_001.wav'},
 
-# Turn 2 — First item: flour (homophone trap — flour vs flower)
+# Turn 2 — First item: flour (homophone trap: flour vs flower)
 {'input': "Yes. I need flour for baking. Five pound bag.",
  'golden_text': "All-Purpose Flour, five-pound bag for six ninety-nine. "
                 "Added to your order.",
@@ -57,7 +55,7 @@ turns = [
  'categories': ['tool_use', 'ambiguous_entity'],
  'audio_file': 'audio/turn_002.wav'},
 
-# Turn 3 — Vague pronoun: "make that two" (no item name — model infers flour)
+# Turn 3 — Vague pronoun: "make that two" → model must infer flour
 {'input': "Actually, make that two.",
  'golden_text': "Updated to two bags of All-Purpose Flour — thirteen "
                 "ninety-eight for the flour.",
@@ -66,7 +64,7 @@ turns = [
  'categories': ['long_range_memory', 'numerical_reasoning'],
  'audio_file': 'audio/turn_003.wav'},
 
-# Turn 4 — Mid-sentence self-correction: sourdough rolls → loaf
+# Turn 4 — Mid-sentence self-correction: rolls → loaf
 {'input': "I need the sourdough rolls— actually, the loaf.",
  'golden_text': "Sourdough Loaf, seven fifty for one loaf. Got it — the "
                 "loaf, not the rolls. Adding that.",
@@ -80,7 +78,7 @@ turns = [
  'categories': ['tool_use', 'ambiguous_entity'],
  'audio_file': 'audio/turn_004.wav'},
 
-# Turn 5 — Eggs without disambiguation (model must pick correctly)
+# Turn 5 — Straightforward item lookup: organic eggs
 {'input': "And some organic eggs.",
  'golden_text': "Organic Eggs, one dozen for six forty-nine. Adding.",
  'required_function_call': {'name': 'lookup_item',
@@ -93,8 +91,7 @@ turns = [
  'categories': ['tool_use', 'ambiguous_entity'],
  'audio_file': 'audio/turn_005.wav'},
 
-# Turn 6 — (#2 Relative math) "Double the eggs" — model infers 1→2 dozen
-# Order: flour ×2 ($13.98) + sourdough ($7.50) + eggs ×2 ($12.98) = $34.46
+# Turn 6 — Relative quantity math: "double the eggs" (1→2 dozen)
 {'input': "Double the eggs.",
  'golden_text': "Updated to two dozen Organic Eggs — twelve ninety-eight "
                 "for the eggs.",
@@ -103,8 +100,7 @@ turns = [
  'categories': ['long_range_memory', 'numerical_reasoning'],
  'audio_file': 'audio/turn_006.wav'},
 
-# Turn 7 — Gray sea salt
-# Order: + salt ($8.49) = $42.95
+# Turn 7 — Straightforward item lookup: gray sea salt
 {'input': "Oh, and gray sea salt — the eight-ounce jar.",
  'golden_text': "Gray Sea Salt, eight-ounce jar for eight forty-nine. "
                 "Added.",
@@ -119,10 +115,10 @@ turns = [
  'audio_file': 'audio/turn_007.wav'},
 
 # ============================================================================
-# TURNS 8-16: MORE ITEMS + NEW CHALLENGES
+# TURNS 8-16: MORE ITEMS + DISAMBIGUATION CHALLENGES
 # ============================================================================
 
-# Turn 8 — Tangential KB question mid-order: delivery timing
+# Turn 8 — Off-topic KB question mid-order: delivery timing
 {'input': "By the way — is same-day delivery available?",
  'golden_text': "If you place your order before two PM, you're eligible "
                 "for same-day delivery, subject to availability. The "
@@ -133,8 +129,7 @@ turns = [
  'categories': ['basic_qa'],
  'audio_file': 'audio/turn_008.wav'},
 
-# Turn 9 — Maple syrup (name close to maple candy)
-# Order: + syrup ($9.99) = $52.94
+# Turn 9 — Maple syrup (similar name to maple candy — disambiguation later)
 {'input': "OK good. Now I need maple syrup.",
  'golden_text': "Maple Syrup, Grade A, twelve-ounce bottle for nine "
                 "ninety-nine. Added.",
@@ -148,8 +143,7 @@ turns = [
  'categories': ['tool_use', 'ambiguous_entity'],
  'audio_file': 'audio/turn_009.wav'},
 
-# Turn 10 — Quantity change: maple syrup from 1 to 2 bottles
-# Order: syrup ×2 ($19.98) → total = $62.93
+# Turn 10 — Quantity update: maple syrup 1→2 bottles
 {'input': "Actually, make that two bottles of the maple syrup.",
  'golden_text': "Updated to two bottles of Maple Syrup — nineteen "
                 "ninety-eight for the syrup.",
@@ -158,8 +152,7 @@ turns = [
  'categories': ['long_range_memory', 'numerical_reasoning'],
  'audio_file': 'audio/turn_010.wav'},
 
-# Turn 11 — Maple candy (name close to maple syrup)
-# Order: + candy ($13.99) = $76.92
+# Turn 11 — Maple candy (must not confuse with maple syrup already ordered)
 {'input': "And also the maple candy.",
  'golden_text': "Maple Candy, six-ounce box for thirteen ninety-nine. "
                 "Added.",
@@ -173,7 +166,7 @@ turns = [
  'categories': ['tool_use', 'ambiguous_entity'],
  'audio_file': 'audio/turn_011.wav'},
 
-# Turn 12 — FALSE MEMORY TRAP: wrong price for maple syrup
+# Turn 12 — False memory trap: user confuses syrup/candy prices
 {'input': "And the maple syrup was thirteen dollars ninety-nine, right?",
  'golden_text': "No — the Maple Syrup is nine ninety-nine per bottle. "
                 "You have two bottles for nineteen ninety-eight. Thirteen "
@@ -184,9 +177,7 @@ turns = [
  'categories': ['long_range_memory', 'numerical_reasoning'],
  'audio_file': 'audio/turn_012.wav'},
 
-# Turn 13 — (#12 Audio false start) "four— for the— olive oil"
-# "four" sounds like a quantity but customer corrects to "for the"
-# Order: + olive oil ($12.99) = $89.91
+# Turn 13 — Audio false start: "four—" sounds like quantity, actually "for the"
 {'input': "I need four— for the— I mean, add olive oil.",
  'golden_text': "Extra Virgin Olive Oil, sixteen-ounce bottle for twelve "
                 "ninety-nine. Added.",
@@ -200,10 +191,7 @@ turns = [
  'categories': ['tool_use', 'ambiguous_entity'],
  'audio_file': 'audio/turn_013.wav'},
 
-# Turn 14 — (#10 Partial name reference) "Add the olives too"
-# Customer says "the olives" — model resolves from context (olive oil just
-# discussed) that they mean Kalamata Olives, a separate product.
-# Order: + olives ($8.49) = $98.40
+# Turn 14 — Partial name: "the olives" is a separate product from olive oil
 {'input': "Add the olives too.",
  'golden_text': "Kalamata Olives, ten-ounce jar for eight forty-nine. "
                 "Added — that's separate from the olive oil.",
@@ -217,9 +205,7 @@ turns = [
  'categories': ['tool_use', 'ambiguous_entity'],
  'audio_file': 'audio/turn_014.wav'},
 
-# Turn 15 — (#5 Ambiguous "both Italian ones")
-# Lookup returns two results; customer takes BOTH.
-# Order: + parsley ($2.49) + seasoning ($5.99) = $106.88
+# Turn 15 — Ambiguous "both Italian ones": lookup returns two, add both
 {'input': "Italian parsley... actually, I'll take both Italian ones.",
  'golden_text': "I found two Italian items — Italian Parsley, one bunch "
                 "for two forty-nine, and Italian Seasoning, three-ounce "
@@ -238,8 +224,7 @@ turns = [
  'categories': ['tool_use', 'ambiguous_entity'],
  'audio_file': 'audio/turn_015.wav'},
 
-# Turn 16 — (#1 Three items in one turn) honey + balsamic + vanilla
-# Order: + honey ($10.99) + balsamic ($9.99) + vanilla ($11.99) = $139.85
+# Turn 16 — Three items in one utterance: honey, balsamic, vanilla
 {'input': "Also throw in some honey, balsamic vinegar, and vanilla extract.",
  'golden_text': "Raw Honey, twelve-ounce jar for ten ninety-nine. "
                 "Balsamic Vinegar, eight-ounce bottle for nine ninety-nine. "
@@ -269,12 +254,10 @@ turns = [
  'audio_file': 'audio/turn_016.wav'},
 
 # ============================================================================
-# TURNS 17-20: FLOWER HOMOPHONE + CONDITIONAL + CHAINED + SUBTOTAL
+# TURNS 17-20: HOMOPHONE, CONDITIONAL LOGIC, CHAINED EDITS, SUBTOTAL
 # ============================================================================
 
-# Turn 17 — (#13 Homophone collision) flower bouquet alongside flour
-# Customer already has flour on order. "flower bouquet" must NOT be confused.
-# Order: + flower bouquet ($34.99) = $174.84
+# Turn 17 — Homophone collision: "flower bouquet" alongside baking "flour"
 {'input': "And a flower bouquet for my wife.",
  'golden_text': "Fresh Flower Bouquet, mixed seasonal for thirty-four "
                 "ninety-nine. Added — and just to be clear, that's the "
@@ -290,9 +273,7 @@ turns = [
  'categories': ['tool_use', 'ambiguous_entity'],
  'audio_file': 'audio/turn_017.wav'},
 
-# Turn 18 — (#3 Conditional addition) milk under $7
-# Organic Whole Milk is $6.99, which is under $7 → add it.
-# Order: + milk ($6.99) = $181.83
+# Turn 18 — Conditional addition: "under seven dollars? If so, add it"
 {'input': "Do you have whole milk under seven dollars? If so, add it.",
  'golden_text': "Organic Whole Milk, one gallon for six ninety-nine — "
                 "that's under seven dollars, so I'm adding it.",
@@ -306,9 +287,7 @@ turns = [
  'categories': ['tool_use', 'numerical_reasoning'],
  'audio_file': 'audio/turn_018.wav'},
 
-# Turn 19 — (#4 Chained corrections) two state changes, no tool call
-# Syrup 2→1 (-$9.99), parsley 1→2 (+$2.49) → net -$7.50
-# Order: $181.83 - $9.99 + $2.49 = $174.33
+# Turn 19 — Chained edits in one utterance: syrup 2→1, parsley 1→2
 {'input': "Change the syrup back to one bottle and double the parsley.",
  'golden_text': "Updated — Maple Syrup down to one bottle for nine "
                 "ninety-nine, and Italian Parsley doubled to two bunches "
@@ -319,9 +298,7 @@ turns = [
  'categories': ['long_range_memory', 'numerical_reasoning'],
  'audio_file': 'audio/turn_019.wav'},
 
-# Turn 20 — (#14 Fifteen/fifty audio confusion) organic bananas + subtotal
-# Customer says "fifty" then corrects to "fifteen, one-five."
-# Order: + bananas 15 × $0.99 = $14.85 → total = $189.18
+# Turn 20 — Fifteen/fifty audio confusion + self-correction + subtotal request
 {'input': "Oh, and organic bananas — fifty pounds. "
           "Wait, no, fifteen. One-five. What's my running total?",
  'golden_text': "Organic Bananas, ninety-nine cents per pound. Fifteen "
@@ -338,12 +315,10 @@ turns = [
  'audio_file': 'audio/turn_020.wav'},
 
 # ============================================================================
-# TURNS 21-22: PHONE CORRECTION + PLACE ORDER + READ-BACK
+# TURNS 21-22: PHONE CORRECTION, PLACE ORDER, READ-BACK
 # ============================================================================
 
-# Turn 21 — (#11 Phone correction) + place order
-# Customer corrects phone from 3617 → 3670, then places order.
-# 16 items, $189.18, free delivery (>$75 in Zone 1)
+# Turn 21 — Phone correction (3617→3670) + place order (16 items)
 {'input': "My number is actually 818-940-3670, not 3617. "
           "OK, go ahead and place it.",
  'golden_text': "Got it — updated phone to 8-1-8, 9-4-0, 3-6-7-0. "
@@ -397,7 +372,7 @@ turns = [
  'categories': ['tool_use', 'long_range_memory', 'numerical_reasoning'],
  'audio_file': 'audio/turn_021.wav'},
 
-# Turn 22 — Read-back via verify_details (16 items)
+# Turn 22 — Full order read-back via verify_details (16 items)
 {'input': "Wait, read me each item before I go.",
  'golden_text': "Here's your order for Carmen Reyes, delivery to 3840 "
                 "Willow Lane, Pasadena, phone 818-940-3670:\n\n"
@@ -466,12 +441,10 @@ turns = [
  'audio_file': 'audio/turn_022.wav'},
 
 # ============================================================================
-# TURNS 23-29: POST-ORDER MODIFICATIONS + RECONCILIATION
+# TURNS 23-29: POST-ORDER MODIFICATIONS + FINAL RECONCILIATION
 # ============================================================================
 
-# Turn 23 — Combined: remove maple candy + swap balsamic → Dijon
-# Remove candy (-$13.99), remove balsamic (-$9.99), lookup dijon, add dijon (+$4.49)
-# $189.18 - $13.99 - $9.99 + $4.49 = $169.69
+# Turn 23 — Compound edit: remove candy + swap balsamic for Dijon mustard
 {'input': "Take off the maple candy. And swap the balsamic vinegar "
           "for Dijon mustard.",
  'golden_text': "Removed the Maple Candy. And I've swapped out the "
@@ -506,8 +479,7 @@ turns = [
  'categories': ['tool_use', 'long_range_memory', 'numerical_reasoning'],
  'audio_file': 'audio/turn_023.wav'},
 
-# Turn 24 — Retroactive change: flour from 2 bags back to 1
-# $169.69 - $6.99 = $162.70
+# Turn 24 — Retroactive quantity change: flour 2→1
 {'input': "And go back to just one bag of flour.",
  'golden_text': "Updated to one bag of All-Purpose Flour. Your subtotal "
                 "is now one hundred sixty-two seventy.",
@@ -520,8 +492,7 @@ turns = [
  'categories': ['tool_use', 'long_range_memory', 'numerical_reasoning'],
  'audio_file': 'audio/turn_024.wav'},
 
-# Turn 25 — (#6 Revert removal) put balsamic vinegar back on
-# $162.70 + $9.99 = $172.69
+# Turn 25 — Revert earlier removal: add balsamic vinegar back
 {'input': "Actually, put the balsamic vinegar back on too.",
  'golden_text': "Balsamic Vinegar added back — eight-ounce bottle for "
                 "nine ninety-nine. Your subtotal is now one hundred "
@@ -535,10 +506,7 @@ turns = [
  'categories': ['tool_use', 'long_range_memory'],
  'audio_file': 'audio/turn_025.wav'},
 
-# Turn 26 — (#15 Conditional removal by price) "anything over ten dollars"
-# Model must scan the order, identify 4 items with unit price > $10:
-#   Olive Oil ($12.99), Honey ($10.99), Vanilla ($11.99), Flower ($34.99)
-# Total removed: $70.96.  $172.69 - $70.96 = $101.73
+# Turn 26 — Conditional removal by price: "anything over ten dollars"
 {'input': "Actually, take off anything over ten dollars.",
  'golden_text': "Let me check your order — items over ten dollars per unit "
                 "are Extra Virgin Olive Oil at twelve ninety-nine, Raw Honey "
@@ -571,9 +539,7 @@ turns = [
  'categories': ['tool_use', 'long_range_memory', 'numerical_reasoning'],
  'audio_file': 'audio/turn_026.wav'},
 
-# Turn 27 — (#9 "Same as first" + #8 Second subtotal + delivery check)
-# "First item" = flour. Currently qty 1, add another → qty 2.
-# $101.73 + $6.99 = $108.72. Still > $75 → free delivery.
+# Turn 27 — Implicit reference: "whatever I ordered first" + subtotal + delivery check
 {'input': "Add another one of whatever I ordered first. "
           "What's my total now? Is delivery still free?",
  'golden_text': "Your first item was All-Purpose Flour — I've bumped it "
@@ -590,11 +556,7 @@ turns = [
  'categories': ['tool_use', 'long_range_memory', 'numerical_reasoning'],
  'audio_file': 'audio/turn_027.wav'},
 
-# Turn 28 — Final read-back (verify_details with 12 final items)
-# Final: flour ×2 ($13.98), sourdough ($7.50), eggs ×2 ($12.98),
-# salt ($8.49), syrup ×1 ($9.99), olives ($8.49),
-# parsley ×2 ($4.98), seasoning ($5.99), balsamic ($9.99),
-# milk ($6.99), dijon ($4.49), bananas ×15 ($14.85) = $108.72
+# Turn 28 — Final read-back via verify_details (12 items after all edits)
 {'input': "Read me the final order one more time.",
  'golden_text': "Here's your final order:\n\n"
                 "Customer: Carmen Reyes\n"
@@ -655,7 +617,7 @@ turns = [
  'categories': ['tool_use', 'long_range_memory'],
  'audio_file': 'audio/turn_028.wav'},
 
-# Turn 29 — Final confirmation + end session
+# Turn 29 — Closing: user confirms, end session
 {'input': "That's perfect. Thanks so much!",
  'golden_text': "Your order ORD-5521 is confirmed! Delivery to 3840 "
                 "Willow Lane, Pasadena. Your total is one hundred eight "
