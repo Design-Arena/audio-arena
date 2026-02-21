@@ -81,11 +81,12 @@ turns = [
  'categories': ['tool_use', 'long_range_memory'],
  'audio_file': 'audio/turn_003.wav'},
 
-# Turn 4 — Two slot selections in one utterance + audio -teen/-ty (3:30 vs 3:13)
-{'input': "I'll take the nine-fifteen for me. And for Danielle, three-thirty ",
+# Turn 4 — Two slot selections in one utterance + audio
+{'input': "I'll take the nine-fifteen for me. And for Danielle, three-thirty",
  'golden_text': "Got it — 9:15 AM with Dr. Perry for your cleaning, and "
                 "3:30 PM with Dr. Barry for Danielle's orthodontic "
-                "consultation. Both on Monday, January 13th.",
+                "consultation. Both on Monday, January 13th. I'll just "
+                "need phone numbers for each to book those.",
  'required_function_call': None,
  'categories': ['numerical_reasoning', 'long_range_memory'],
  'audio_file': 'audio/turn_004.wav'},
@@ -128,7 +129,8 @@ turns = [
 
 # Turn 8 — Name spelling with M/N audio trap + preemptive disambiguation
 {'input': "Last name for both is Nolan — N as in November, O-L-A-N.",
- 'golden_text': "Got it — Nolan, N-O-L-A-N, for both Daniel and Danielle.",
+ 'golden_text': "Yes, I have Nolan, N-O-L-A-N, for both Daniel and Danielle. "
+                "Thanks for confirming the spelling.",
  'required_function_call': None,
  'categories': ['basic_qa'],
  'audio_file': 'audio/turn_008.wav'},
@@ -183,7 +185,7 @@ turns = [
  'audio_file': 'audio/turn_011.wav'},
 
 # Turn 12 — Rebook with numerical constraint checking
-{'input': "Three-forty-five. But wait — she'll still be done before five "
+{'input': "Three-forty-five. She'll still be done before five "
           "with a forty-five minute consultation, right?",
  'golden_text': "Yes — 3:45 plus 45 minutes puts her at 4:30 PM, well before "
                 "5:00. Booked! Danielle's orthodontic consultation with "
@@ -207,7 +209,7 @@ turns = [
 
 # Turn 13 — Revise ONLY Daniel's appointment, explicitly leave Danielle's alone
 {'input': "Actually, I just remembered I have a nine AM call. Move my "
-          "cleaning to ten-thirty — but don't touch Danielle's.",
+          "cleaning to ten-thirty.",
  'golden_text': "Updated — your cleaning is now at 10:30 AM instead of "
                 "9:15 AM on Monday with Dr. Perry. Danielle's 3:45 PM "
                 "consultation with Dr. Barry stays the same.",
@@ -238,32 +240,35 @@ turns = [
  'audio_file': 'audio/turn_015.wav'},
 
 # ============================================================================
-# TURNS 16-17: CROSS-ENTITY PHONE SWAP
+# TURNS 16-17: CROSS-ENTITY PHONE SWAP + SHORT CONFIRMATION
 # ============================================================================
 
-# Turn 16 — Swap phone numbers between appointments
+# Turn 16 — Swap phone numbers between appointments (both in one go)
 {'input': "Actually, I want to swap the phone numbers. Put my wife's cell "
           "on my appointment and my number on Danielle's.",
- 'golden_text': "Updating your appointment to 415-960-1614. I'll update "
-                "Danielle's next.",
- 'required_function_call': {'name': 'update_patient_info',
-                            'args': {'appointment_id': 'APT-001',
-                                     'field': 'phone',
-                                     'new_value': '415-960-1614'}},
+ 'golden_text': "Done — swapped both phone numbers. Your cleaning appointment "
+                "now has 415-960-1614, and Danielle's consultation now has "
+                "415-916-1640.",
+ 'required_function_call': [
+     {'name': 'update_patient_info',
+      'args': {'appointment_id': 'APT-001',
+               'field': 'phone',
+               'new_value': '415-960-1614'}},
+     {'name': 'update_patient_info',
+      'args': {'appointment_id': 'APT-002',
+               'field': 'phone',
+               'new_value': '415-916-1640'}},
+ ],
  'function_call_response': {'status': 'success'},
  'categories': ['tool_use', 'long_range_memory'],
  'audio_file': 'audio/turn_016.wav'},
 
-# Turn 17 — Minimal-context trigger: "And Danielle's" → model must infer the swap
-{'input': "Yeah. And Danielle's.",
- 'golden_text': "Done — Danielle's contact number is now 415-916-1640. "
-                "Phone numbers have been swapped.",
- 'required_function_call': {'name': 'update_patient_info',
-                            'args': {'appointment_id': 'APT-002',
-                                     'field': 'phone',
-                                     'new_value': '415-916-1640'}},
- 'function_call_response': {'status': 'success'},
- 'categories': ['tool_use', 'long_range_memory'],
+# Turn 17 — Short-audio confirmation
+{'input': "Yep.",
+ 'golden_text': "Great. Is there anything else you'd like to change, or are "
+                "we good to go?",
+ 'required_function_call': None,
+ 'categories': ['basic_qa'],
  'audio_file': 'audio/turn_017.wav'},
 
 # ============================================================================
@@ -301,39 +306,34 @@ turns = [
  'audio_file': 'audio/turn_020.wav'},
 
 # ============================================================================
-# TURNS 21-22: UNDO THE PHONE SWAP
+# TURN 21: UNDO THE PHONE SWAP
 # ============================================================================
 
-# Turn 21 — Revert both phones: user asks for both, system handles Daniel's first
+# Turn 21 — Revert both phones in one go (user explicitly asks for both)
 {'input': "Ugh, that's confusing. Put them back the way they were — my cell "
           "on mine, wife's number on Danielle's.",
- 'golden_text': "Reverting both — your appointment is back to 415-916-1640. "
-                "Updating Danielle's now.",
- 'required_function_call': {'name': 'update_patient_info',
-                            'args': {'appointment_id': 'APT-001',
-                                     'field': 'phone',
-                                     'new_value': '415-916-1640'}},
+ 'golden_text': "Done — reverted both phone numbers. Your cleaning appointment "
+                "is back to 415-916-1640, and Danielle's consultation is back "
+                "to 415-960-1614. Both restored to the originals.",
+ 'required_function_call': [
+     {'name': 'update_patient_info',
+      'args': {'appointment_id': 'APT-001',
+               'field': 'phone',
+               'new_value': '415-916-1640'}},
+     {'name': 'update_patient_info',
+      'args': {'appointment_id': 'APT-002',
+               'field': 'phone',
+               'new_value': '415-960-1614'}},
+ ],
  'function_call_response': {'status': 'success'},
  'categories': ['tool_use', 'long_range_memory'],
  'audio_file': 'audio/turn_021.wav'},
 
-# Turn 22 — User confirms; system completes the second revert
-{'input': "Mm-hmm.",
- 'golden_text': "Done — Danielle's number is back to 415-960-1614. "
-                "Both phone numbers are restored to the originals.",
- 'required_function_call': {'name': 'update_patient_info',
-                            'args': {'appointment_id': 'APT-002',
-                                     'field': 'phone',
-                                     'new_value': '415-960-1614'}},
- 'function_call_response': {'status': 'success'},
- 'categories': ['tool_use', 'long_range_memory'],
- 'audio_file': 'audio/turn_022.wav'},
-
 # ============================================================================
-# TURNS 23-24: FULL RECAP + CLOSING WITH KB
+# TURNS 22-23: FULL RECAP + CLOSING WITH KB
 # ============================================================================
 
-# Turn 23 — Full recap of BOTH appointments after all revisions
+# Turn 22 — Full recap of BOTH appointments after all revisions
 {'input': "Read me back everything — both appointments, all the details.",
  'golden_text': "Here's everything:\n\n"
                 "1. Daniel Nolan — Cleaning with Dr. Perry, Monday "
@@ -344,14 +344,22 @@ turns = [
                 "Both under Delta Dental. Is everything correct?",
  'required_function_call': None,
  'categories': ['long_range_memory'],
- 'audio_file': 'audio/turn_023.wav'},
+ 'audio_file': 'audio/turn_022.wav'},
 
-# Turn 24 — First-time patient KB detail applied to BOTH patients
+# Turn 23 — First-time patient KB detail applied to BOTH patients
 {'input': "Perfect. We haven't been before — anything we should know?",
  'golden_text': "Since you're both first-time patients, please arrive 15 "
                 "minutes early for intake paperwork — that's 10:15 AM for "
                 "you and 3:30 PM for Danielle. You can download the forms "
-                "ahead of time at bayshorefamilydental.com. Have a great day!",
+                "ahead of time at bayshorefamilydental.com. Anything else "
+                "I can help with?",
+ 'required_function_call': None,
+ 'categories': ['basic_qa'],
+ 'audio_file': 'audio/turn_023.wav'},
+
+# Turn 24 — User confirms done, session ends
+{'input': "Great, that's everything. Thanks!",
+ 'golden_text': "You're welcome! See you both on Monday. Have a great day!",
  'required_function_call': {'name': 'end_session', 'args': {}},
  'categories': ['tool_use'],
  'audio_file': 'audio/turn_024.wav'},
