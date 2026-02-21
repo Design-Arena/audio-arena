@@ -22,7 +22,6 @@ staging_*/
 # Internal scripts (not for public repo)
 scripts/publish_to_hf.py
 scripts/upload_to_supabase.py
-scripts/generate_audio.py
 scripts/generate_appointment_audio.py
 
 # Unpublished benchmarks
