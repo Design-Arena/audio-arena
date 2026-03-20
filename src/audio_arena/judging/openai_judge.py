@@ -27,7 +27,7 @@ from .llm_judge import (
 
 
 OPENAI_JUDGE_VERSION = "openai-v10-kb-visible-vs-tool-only"
-OPENAI_REHYDRATED_JUDGE_VERSION = "openai-v10-rehydrated-kb-visible-vs-tool-only"
+OPENAI_REHYDRATED_JUDGE_VERSION = "openai-v11-rehydrated-oracle-continuation"
 OPENAI_JUDGE_MODEL = "gpt-5.2"
 
 

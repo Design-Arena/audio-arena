@@ -69,6 +69,11 @@ class BasePipeline(ABC):
         self._consumed_tool_response_indices: set[int] = set()
         # Last tool result (for explicit delivery to GPT/Grok Realtime APIs; see docstring below)
         self._last_tool_result: Optional[Dict[str, Any]] = None
+        self._tool_capture_only: bool = False
+        self._oracle_continuation_only: bool = False
+        self._captured_tool_phase: Optional[Dict[str, Any]] = None
+        self._juice: Optional[int] = None
+        self._verbosity: Optional[int] = None
 
     @staticmethod
     def build_rehydration_history(
@@ -101,6 +106,7 @@ class BasePipeline(ABC):
             golden_text = turn.get("golden_text", "")
             fc = turn.get("required_function_call")
             fc_response = turn.get("function_call_response")
+            has_golden_assistant = bool(turn.get("golden_text"))
 
             messages.append({"role": "user", "content": user_input})
             lines.append(f"User: {user_input}")
@@ -119,9 +125,12 @@ class BasePipeline(ABC):
                     if j < len(responses):
                         lines.append(f"  [Tool result: {json.dumps(responses[j])}]")
 
-            messages.append({"role": "assistant", "content": golden_text})
-            lines.append(f"Assistant: {golden_text}")
-            lines.append("")
+            if has_golden_assistant:
+                messages.append({"role": "assistant", "content": golden_text})
+                lines.append(f"Assistant: {golden_text}")
+                lines.append("")
+            elif fc is not None:
+                lines.append("")
 
         instruction_string = "\n".join(lines)
         return messages, instruction_string
@@ -142,6 +151,10 @@ class BasePipeline(ABC):
         turn_indices: Optional[List[int]] = None,
         rehydration_turns: Optional[List[Dict[str, Any]]] = None,
         disable_vad: bool = False,
+        juice: Optional[int] = None,
+        verbosity: Optional[int] = None,
+        stop_after_first_tool_call: bool = False,
+        oracle_continuation_only: bool = False,
     ) -> None:
         """Run the complete benchmark. Pipeline handles everything internally.
 
@@ -156,6 +169,13 @@ class BasePipeline(ABC):
                 history is injected into the model context, and only the target turn(s)
                 specified by ``turn_indices`` are executed live.
             disable_vad: Disable server-side VAD for compatible realtime pipelines.
+            juice: Optional OpenAI Realtime backdoor reasoning-effort override.
+            verbosity: Optional OpenAI Realtime backdoor verbosity override.
+            stop_after_first_tool_call: Stop the run immediately after capturing the
+                first live tool call/result for the target turn.
+            oracle_continuation_only: Run a continuation-only turn where the current
+                user/tool/tool-result state is already seeded and the model should
+                produce only the post-tool assistant response.
         """
         self.recorder = recorder
         self.model_name = model
@@ -163,6 +183,11 @@ class BasePipeline(ABC):
         self._turn_indices = turn_indices
         self._rehydration_turns = rehydration_turns
         self._disable_vad = disable_vad
+        self._tool_capture_only = stop_after_first_tool_call
+        self._oracle_continuation_only = oracle_continuation_only
+        self._captured_tool_phase = None
+        self._juice = juice
+        self._verbosity = verbosity
 
         # Create LLM service
         self.llm = self._create_llm(service_class, model)
@@ -196,6 +221,93 @@ class BasePipeline(ABC):
     def _get_current_turn(self) -> dict:
         """Get the current turn data."""
         return self.effective_turns[self.turn_idx]
+
+    def get_captured_tool_phase(self) -> Optional[Dict[str, Any]]:
+        """Return metadata captured during a tool-capture-only run."""
+        return self._captured_tool_phase
+
+    def capture_tool_phase(
+        self,
+        function_name: str,
+        arguments: Dict[str, Any],
+        result: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Capture live tool-use metadata for the current turn."""
+        self._captured_tool_phase = self._build_tool_capture_metadata(
+            function_name,
+            arguments,
+            result,
+        )
+        return self._captured_tool_phase
+
+    def should_abort_after_tool_capture(self) -> bool:
+        """Return True when realtime services should stop after the first tool call."""
+        return self._tool_capture_only and self._captured_tool_phase is not None
+
+    async def abort_after_tool_capture(self) -> None:
+        """Terminate a capture-only run once the live tool call is recorded."""
+        if self.done:
+            return
+        logger.info("[ToolCapture] Aborting run after first live tool call capture")
+        self.done = True
+        if self.task is not None:
+            await self.task.cancel()
+
+    def _build_tool_capture_metadata(
+        self,
+        function_name: str,
+        arguments: Dict[str, Any],
+        result: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Summarize the first live tool call for artifact merging."""
+        current_turn = self._get_current_turn()
+        required_calls = current_turn.get("required_function_call")
+        custom_response = current_turn.get("function_call_response")
+
+        oracle_calls = required_calls if isinstance(required_calls, list) else [required_calls] if required_calls else []
+        oracle_results = (
+            custom_response
+            if isinstance(custom_response, list)
+            else [custom_response] if custom_response is not None else []
+        )
+
+        tool_name_correct: Optional[bool] = None
+        tool_args_correct: Optional[bool] = None
+
+        if required_calls is None:
+            tool_name_correct = False
+            tool_args_correct = None
+        elif isinstance(required_calls, dict):
+            expected_name = required_calls.get("name")
+            expected_args = required_calls.get("args", {})
+            tool_name_correct = function_name == expected_name
+            tool_args_correct = (
+                self._tool_args_match(expected_args, arguments)
+                if tool_name_correct
+                else False
+            )
+        else:
+            matching_names = [
+                call for call in required_calls if call.get("name") == function_name
+            ]
+            tool_name_correct = bool(matching_names)
+            tool_args_correct = any(
+                self._tool_args_match(call.get("args", {}), arguments)
+                for call in matching_names
+            ) if matching_names else False
+
+        return {
+            "actual_tool_call": {
+                "name": function_name,
+                "args": arguments or {},
+            },
+            "actual_tool_result": result,
+            "tool_name_correct": tool_name_correct,
+            "tool_args_correct": tool_args_correct,
+            "tool_use_pass": bool(tool_name_correct and tool_args_correct),
+            "oracle_tool_calls": oracle_calls,
+            "oracle_tool_results": oracle_results,
+        }
 
     def _create_llm(
         self, service_class: Optional[type], model: str
@@ -407,6 +519,12 @@ class BasePipeline(ABC):
             params.arguments or {},
         )
         self._last_tool_result = result
+        if self._tool_capture_only and self._captured_tool_phase is None:
+            self._captured_tool_phase = self._build_tool_capture_metadata(
+                params.function_name,
+                params.arguments or {},
+                result,
+            )
         await params.result_callback(result)
 
         # end_session tool: gracefully terminate the run

@@ -12,10 +12,13 @@ import asyncio
 import json
 import time
 import uuid
-from typing import Callable, Optional
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any, Callable, Optional
 
 from loguru import logger
 
+from pipecat.adapters.schemas.tools_schema import ToolsSchema
 from pipecat.services.llm_service import FunctionCallFromLLM
 from pipecat.services.openai.realtime import events as rt_events
 from pipecat.services.openai.realtime.llm import OpenAIRealtimeLLMService
@@ -130,13 +133,21 @@ class OpenAIRealtimeLLMServiceExplicitToolResult(ReconnectOnDisconnectMixin, Ope
     def __init__(
         self,
         get_last_tool_result: Optional[Callable[[], dict]] = None,
+        capture_tool_phase: Optional[Callable[[str, dict, dict], Any]] = None,
+        should_abort_after_tool_call: Optional[Callable[[], bool]] = None,
+        abort_after_tool_call: Optional[Callable[[], Any]] = None,
         on_reconnecting: Optional[Callable[[], None]] = None,
         on_reconnected: Optional[Callable[[], None]] = None,
         rehydration_history_items: Optional[list[rt_events.ConversationItem]] = None,
+        session_backdoor_options: Optional[dict[str, int]] = None,
+        websocket_event_log_path: Optional[str] = None,
         **kwargs,
     ):
         super().__init__(**kwargs)
         self._get_last_tool_result = get_last_tool_result
+        self._capture_tool_phase = capture_tool_phase
+        self._should_abort_after_tool_call = should_abort_after_tool_call
+        self._abort_after_tool_call = abort_after_tool_call
         self._init_reconnection_callbacks(on_reconnecting, on_reconnected)
         self._pending_response_create = False
         self._waiting_for_response_done_before_response_create = False
@@ -147,6 +158,108 @@ class OpenAIRealtimeLLMServiceExplicitToolResult(ReconnectOnDisconnectMixin, Ope
         self._manual_turn_input_committed = False
         self._manual_response_in_flight = False
         self._last_manual_commit_monotonic = 0.0
+        self._session_backdoor_options = dict(session_backdoor_options or {})
+        self._websocket_event_log_path = (
+            Path(websocket_event_log_path).expanduser().resolve()
+            if websocket_event_log_path
+            else None
+        )
+
+    @staticmethod
+    def _sanitize_ws_event_payload(payload):
+        """Keep the event stream readable by truncating large audio/base64 fields."""
+        if isinstance(payload, dict):
+            sanitized = {}
+            for key, value in payload.items():
+                if (
+                    key in {"audio", "delta"}
+                    and isinstance(value, str)
+                    and len(value) > 160
+                ):
+                    sanitized[key] = {
+                        "__truncated__": True,
+                        "length": len(value),
+                        "preview": value[:32],
+                    }
+                    continue
+                sanitized[key] = OpenAIRealtimeLLMServiceExplicitToolResult._sanitize_ws_event_payload(
+                    value
+                )
+            return sanitized
+        if isinstance(payload, list):
+            return [
+                OpenAIRealtimeLLMServiceExplicitToolResult._sanitize_ws_event_payload(item)
+                for item in payload
+            ]
+        return payload
+
+    def _record_ws_event(self, *, direction: str, payload, raw_text: Optional[str] = None) -> None:
+        if self._websocket_event_log_path is None:
+            return
+
+        event_type = payload.get("type") if isinstance(payload, dict) else None
+        record = {
+            "ts": datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+            "direction": direction,
+            "event_type": event_type,
+            "payload": self._sanitize_ws_event_payload(payload),
+        }
+        if raw_text is not None:
+            record["raw_length"] = len(raw_text)
+
+        self._websocket_event_log_path.parent.mkdir(parents=True, exist_ok=True)
+        with self._websocket_event_log_path.open("a", encoding="utf-8") as fp:
+            fp.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+    async def _ws_send(self, realtime_message):
+        self._record_ws_event(direction="outgoing", payload=realtime_message)
+        await super()._ws_send(realtime_message)
+
+    @staticmethod
+    def _turn_detection_disabled(turn_detection) -> bool:
+        """Treat both legacy False and explicit null as manual turn handling."""
+        return turn_detection is False or turn_detection is None
+
+    def _build_session_update_payload(self, settings: rt_events.SessionProperties) -> dict:
+        """Serialize session settings and merge optional backdoor fields."""
+        session_payload = settings.model_dump(exclude_none=True)
+        if (
+            settings.audio
+            and settings.audio.input
+            and self._turn_detection_disabled(settings.audio.input.turn_detection)
+        ):
+            session_payload.setdefault("audio", {}).setdefault("input", {})["turn_detection"] = None
+        if self._session_backdoor_options:
+            session_payload["backdoor_options"] = self._session_backdoor_options
+        return {
+            "type": "session.update",
+            "session": session_payload,
+        }
+
+    async def _update_settings(self):
+        """Send session.update, preserving Pipecat defaults plus backdoor options."""
+        settings = self._session_properties
+        adapter = self.get_llm_adapter()
+
+        if self._context:
+            llm_invocation_params = adapter.get_llm_invocation_params(self._context)
+
+            if llm_invocation_params["tools"]:
+                settings.tools = llm_invocation_params["tools"]
+
+            if llm_invocation_params["system_instruction"]:
+                settings.instructions = llm_invocation_params["system_instruction"]
+
+        if settings.tools and isinstance(settings.tools, ToolsSchema):
+            settings.tools = adapter.from_standard_tools(settings.tools)
+
+        payload = self._build_session_update_payload(settings)
+        await self._ws_send(payload)
+        if self._session_backdoor_options:
+            logger.info(
+                "[OpenAI Realtime] Sent session.update with backdoor_options="
+                f"{self._session_backdoor_options}"
+            )
 
     async def _maybe_send_deferred_response_create(self, trigger: str) -> None:
         if not self._pending_response_create:
@@ -191,7 +304,7 @@ class OpenAIRealtimeLLMServiceExplicitToolResult(ReconnectOnDisconnectMixin, Ope
         return bool(
             self._session_properties.audio
             and self._session_properties.audio.input
-            and self._session_properties.audio.input.turn_detection is False
+            and self._turn_detection_disabled(self._session_properties.audio.input.turn_detection)
         )
 
     def reset_manual_turn_state(self) -> None:
@@ -249,7 +362,7 @@ class OpenAIRealtimeLLMServiceExplicitToolResult(ReconnectOnDisconnectMixin, Ope
             logger.debug("[OpenAI Realtime] Debouncing duplicate user stop event")
             return
 
-        # With turn_detection=False the server will not auto-commit buffered audio
+        # With turn_detection=null the server will not auto-commit buffered audio
         # or start a response for us. We have to do both explicitly here.
         self._awaiting_manual_audio_commit = True
         await self.send_client_event(rt_events.InputAudioBufferCommitEvent())
@@ -305,6 +418,33 @@ class OpenAIRealtimeLLMServiceExplicitToolResult(ReconnectOnDisconnectMixin, Ope
             if self._get_last_tool_result
             else {"status": "success"}
         )
+        capture_tool_phase = getattr(self, "_capture_tool_phase", None)
+        if capture_tool_phase:
+            capture_tool_phase(function_call_item.name, args, tool_result)
+        should_abort_after_tool_call = getattr(
+            self,
+            "_should_abort_after_tool_call",
+            None,
+        )
+        if (
+            should_abort_after_tool_call
+            and should_abort_after_tool_call()
+        ):
+            logger.info(
+                "[OpenAI Realtime] Tool capture phase complete; skipping "
+                "function_call_output and ending the current session"
+            )
+            abort_after_tool_call = getattr(
+                self,
+                "_abort_after_tool_call",
+                None,
+            )
+            if abort_after_tool_call:
+                maybe_awaitable = abort_after_tool_call()
+                if asyncio.iscoroutine(maybe_awaitable):
+                    await maybe_awaitable
+            return
+
         output_json = json.dumps(tool_result)
         tool_output_item_id = uuid.uuid4().hex
         self._pending_tool_output_item_ids.add(tool_output_item_id)
@@ -382,6 +522,15 @@ class OpenAIRealtimeLLMServiceExplicitToolResult(ReconnectOnDisconnectMixin, Ope
     async def _receive_task_handler(self):
         """Extend the base receive loop with input_audio_buffer.committed handling."""
         async for message in self._websocket:
+            try:
+                raw_payload = json.loads(message)
+            except json.JSONDecodeError:
+                raw_payload = {"type": "__unparsed__", "raw_preview": message[:200]}
+            self._record_ws_event(
+                direction="incoming",
+                payload=raw_payload,
+                raw_text=message,
+            )
             evt = rt_events.parse_server_event(message)
             if evt.type == "session.created":
                 await self._handle_evt_session_created(evt)

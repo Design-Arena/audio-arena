@@ -617,6 +617,15 @@ class RealtimePipeline(BasePipeline):
             and (self.service_name or "").lower() == "openai-realtime"
         )
 
+    def _build_openai_realtime_backdoor_options(self) -> dict[str, int]:
+        """Build optional Realtime-only backdoor session settings."""
+        payload: dict[str, int] = {}
+        if self._juice is not None:
+            payload["juice"] = self._juice
+        if self._verbosity is not None:
+            payload["verbosity"] = self._verbosity
+        return payload
+
     @staticmethod
     def _build_openai_rehydration_history_items(
         golden_turns: list[dict[str, Any]]
@@ -670,15 +679,16 @@ class RealtimePipeline(BasePipeline):
                         )
                     )
 
-            items.append(
-                rt_events.ConversationItem(
-                    id=f"rehydrate_t{turn_index}_assistant",
-                    type="message",
-                    role="assistant",
-                    status="completed",
-                    content=[rt_events.ItemContent(type="output_text", text=golden_text)],
+            if golden_text:
+                items.append(
+                    rt_events.ConversationItem(
+                        id=f"rehydrate_t{turn_index}_assistant",
+                        type="message",
+                        role="assistant",
+                        status="completed",
+                        content=[rt_events.ItemContent(type="output_text", text=golden_text)],
+                    )
                 )
-            )
 
         return items
 
@@ -814,14 +824,14 @@ class RealtimePipeline(BasePipeline):
             if not api_key:
                 raise EnvironmentError("OPENAI_API_KEY environment variable is required")
 
-            turn_detection: rt_events.TurnDetection | bool = rt_events.TurnDetection(
+            turn_detection: rt_events.TurnDetection | None = rt_events.TurnDetection(
                 type="server_vad",
                 threshold=0.7,
                 prefix_padding_ms=500,
                 silence_duration_ms=800,
             )
             if self._disable_vad:
-                turn_detection = False
+                turn_detection = None
 
             audio_config = rt_events.AudioConfiguration(
                 input=rt_events.AudioInput(
@@ -839,11 +849,21 @@ class RealtimePipeline(BasePipeline):
                 system_instruction=system_instruction,
                 session_properties=session_props,
             )
+            if self.recorder and hasattr(self.recorder, "run_dir"):
+                kwargs["websocket_event_log_path"] = str(
+                    self.recorder.run_dir / "ws_events.jsonl"
+                )
+            backdoor_options = self._build_openai_realtime_backdoor_options()
+            if backdoor_options:
+                kwargs["session_backdoor_options"] = backdoor_options
             if "ExplicitToolResult" in class_name or "XAIRealtime" in class_name:
                 # The service sends function_call_output over the websocket after
                 # the pipeline's tool handler has already produced the payload.
                 kwargs["get_last_tool_result"] = self._get_last_tool_result
             if "ExplicitToolResult" in class_name:
+                kwargs["capture_tool_phase"] = self.capture_tool_phase
+                kwargs["should_abort_after_tool_call"] = self.should_abort_after_tool_capture
+                kwargs["abort_after_tool_call"] = self.abort_after_tool_capture
                 kwargs["on_reconnecting"] = self._on_ws_reconnecting
                 kwargs["on_reconnected"] = self._on_ws_reconnected
                 if self._uses_openai_realtime_history_seeding():
@@ -1440,6 +1460,14 @@ class RealtimePipeline(BasePipeline):
 
         self._seed_rehydration_history_for_reconnects()
         await self._seed_openai_rehydration_history()
+
+        if self._oracle_continuation_only:
+            logger.info(
+                "[OracleContinuation] Starting assistant generation from GT-seeded "
+                "current-turn tool state"
+            )
+            await self.task.queue_frames([LLMRunFrame()])
+            return
 
         # In rehydration mode, skip greeting entirely — no user message was sent
         # (see _setup_context) and no inference was triggered.  The model will

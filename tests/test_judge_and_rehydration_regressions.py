@@ -17,6 +17,12 @@ from audio_arena.judging.llm_judge import (
     get_turn_taking_support,
     write_outputs,
 )
+from audio_arena.cli import (
+    build_missing_tool_capture,
+    build_oracle_continuation_history,
+    merge_oracle_continuation_artifacts,
+    turn_uses_oracle_post_tool_continuation,
+)
 from benchmarks.appointment_bench.turns import turns as appointment_turns
 from audio_arena.pipelines.openai_realtime import OpenAIRealtimeLLMServiceExplicitToolResult
 from audio_arena.pipelines.realtime import RealtimePipeline
@@ -648,6 +654,26 @@ class JudgeAndRehydrationRegressionTests(unittest.TestCase):
         self.assertEqual(items[3].content[0].type, "output_text")
         self.assertEqual(items[3].content[0].text, "Your event is booked.")
 
+    def test_openai_rehydration_history_omits_blank_assistant_for_oracle_continuation(self):
+        items = RealtimePipeline._build_openai_rehydration_history_items(
+            [
+                {
+                    "input": "book the event",
+                    "golden_text": "",
+                    "required_function_call": {
+                        "name": "book_event",
+                        "args": {"name": "Priya Mehta"},
+                    },
+                    "function_call_response": {
+                        "status": "success",
+                        "event_id": "EVT-3001",
+                    },
+                }
+            ]
+        )
+
+        self.assertEqual([item.type for item in items], ["message", "function_call", "function_call_output"])
+
     def test_rehydration_reconnect_history_preserves_tool_results_in_prompt(self):
         pipeline = RealtimePipeline(DummyBenchmark())
         pipeline._rehydration_turns = [
@@ -694,6 +720,148 @@ class JudgeAndRehydrationRegressionTests(unittest.TestCase):
                 len(turn["required_function_call"]),
                 len(turn["function_call_response"]),
             )
+
+    def test_turn_uses_oracle_post_tool_continuation_only_for_single_call_realtime_turns(self):
+        self.assertTrue(
+            turn_uses_oracle_post_tool_continuation(
+                pipeline_type="realtime",
+                turn={
+                    "required_function_call": {"name": "book_event", "args": {"name": "Priya"}},
+                },
+            )
+        )
+        self.assertFalse(
+            turn_uses_oracle_post_tool_continuation(
+                pipeline_type="realtime",
+                turn={
+                    "required_function_call": [
+                        {"name": "book_event", "args": {"name": "Priya"}},
+                    ],
+                },
+            )
+        )
+        self.assertFalse(
+            turn_uses_oracle_post_tool_continuation(
+                pipeline_type="text",
+                turn={
+                    "required_function_call": {"name": "book_event", "args": {"name": "Priya"}},
+                },
+            )
+        )
+
+    def test_build_oracle_continuation_history_appends_current_turn_without_assistant(self):
+        history = build_oracle_continuation_history(
+            [{"input": "hello", "golden_text": "hi"}],
+            {
+                "input": "book the event",
+                "golden_text": "should not be used",
+                "required_function_call": {"name": "book_event", "args": {"name": "Priya"}},
+                "function_call_response": {"status": "success", "event_id": "EVT-3001"},
+            },
+        )
+
+        self.assertEqual(len(history), 2)
+        self.assertEqual(history[-1]["input"], "book the event")
+        self.assertEqual(history[-1]["golden_text"], "")
+
+    def test_build_missing_tool_capture_marks_live_tool_use_as_failed(self):
+        capture = build_missing_tool_capture(
+            {
+                "required_function_call": {"name": "book_event", "args": {"name": "Priya"}},
+                "function_call_response": {"status": "success", "event_id": "EVT-3001"},
+            }
+        )
+
+        self.assertIsNone(capture["actual_tool_call"])
+        self.assertFalse(capture["tool_name_correct"])
+        self.assertFalse(capture["tool_args_correct"])
+        self.assertEqual(capture["oracle_tool_results"], [{"status": "success", "event_id": "EVT-3001"}])
+
+    def test_merge_oracle_continuation_artifacts_rewrites_single_turn_transcript(self):
+        with TemporaryDirectory() as tmpdir:
+            transcript_path = Path(tmpdir) / "transcript.jsonl"
+            transcript_path.write_text(
+                json.dumps(
+                    {
+                        "turn": 7,
+                        "user_text": "book the event",
+                        "assistant_text": "Your event is booked.",
+                        "tool_calls": [],
+                        "tool_results": [],
+                    }
+                ) + "\n",
+                encoding="utf-8",
+            )
+
+            merge_oracle_continuation_artifacts(
+                transcript_path=transcript_path,
+                live_tool_capture={
+                    "actual_tool_call": {"name": "cancel_action", "args": {"name": "Priya"}},
+                    "actual_tool_result": {"status": "error", "error_code": "UNEXPECTED_TOOL_CALL"},
+                    "tool_name_correct": False,
+                    "tool_args_correct": False,
+                    "tool_use_pass": False,
+                    "oracle_tool_calls": [{"name": "book_event", "args": {"name": "Priya"}}],
+                    "oracle_tool_results": [{"status": "success", "event_id": "EVT-3001"}],
+                },
+            )
+
+            row = json.loads(transcript_path.read_text(encoding="utf-8").strip())
+            self.assertEqual(row["tool_calls"], [{"name": "cancel_action", "args": {"name": "Priya"}}])
+            self.assertEqual(
+                row["oracle_continuation"]["oracle_tool_results"],
+                [{"status": "success", "event_id": "EVT-3001"}],
+            )
+
+    def test_format_rehydrated_turns_for_judge_surfaces_oracle_continuation_metadata(self):
+        formatted = format_rehydrated_turns_for_judge(
+            [
+                {
+                    "turn": 2,
+                    "user_text": "book the event",
+                    "assistant_text": "Your event is booked.",
+                    "tool_calls": [{"name": "cancel_action", "args": {"name": "Priya"}}],
+                    "tool_results": [{"name": "cancel_action", "response": {"status": "error"}}],
+                    "oracle_continuation": {
+                        "used": True,
+                        "tool_name_correct": False,
+                        "tool_args_correct": False,
+                        "tool_use_pass": False,
+                        "oracle_tool_calls": [{"name": "book_event", "args": {"name": "Priya"}}],
+                        "oracle_tool_results": [{"status": "success", "event_id": "EVT-3001"}],
+                    },
+                }
+            ],
+            [
+                {"input": "hi", "golden_text": "hello"},
+                {"input": "warm up", "golden_text": "sure"},
+                {
+                    "input": "book the event",
+                    "golden_text": "Your event is booked.",
+                    "required_function_call": {"name": "book_event", "args": {"name": "Priya"}},
+                },
+            ],
+        )
+
+        self.assertIn("Oracle Continuation", formatted)
+        self.assertIn("Oracle Seeded Tool Results", formatted)
+        self.assertIn("Actual Functions", formatted)
+        self.assertIn("Live Tool Capture Results (tool_use_correct only)", formatted)
+        self.assertIn(
+            "source of truth for the assistant response",
+            formatted,
+        )
+
+    def test_rehydrated_judge_prompt_tells_oracle_turns_to_use_seeded_tool_results(self):
+        prompt = build_judge_user_prompt(
+            formatted_turns="**Oracle Continuation**: yes",
+            turn_numbers=[6],
+            cross_turn_realignment=False,
+        )
+
+        self.assertIn("Oracle Continuation", prompt)
+        self.assertIn("Oracle Seeded Tool Calls", prompt)
+        self.assertIn("source of truth for the assistant response", prompt)
 
     def test_manual_turn_handling_ignores_duplicate_stop_after_first_commit(self):
         service = OpenAIRealtimeLLMServiceExplicitToolResult.__new__(
@@ -813,6 +981,59 @@ class JudgeAndRehydrationRegressionTests(unittest.TestCase):
         self.assertTrue(service._pending_response_create)
         self.assertTrue(service._waiting_for_response_done_before_response_create)
         self.assertEqual(len(service._pending_tool_output_item_ids), 1)
+
+    def test_openai_realtime_session_update_payload_preserves_null_turn_detection(self):
+        service = OpenAIRealtimeLLMServiceExplicitToolResult.__new__(
+            OpenAIRealtimeLLMServiceExplicitToolResult
+        )
+        service._session_backdoor_options = {"juice": 64, "verbosity": 2}
+
+        payload = service._build_session_update_payload(
+            rt_events.SessionProperties(
+                instructions="Use the benchmark policy.",
+                audio=rt_events.AudioConfiguration(
+                    input=rt_events.AudioInput(turn_detection=None)
+                ),
+            )
+        )
+
+        self.assertEqual(payload["type"], "session.update")
+        self.assertEqual(payload["session"]["instructions"], "Use the benchmark policy.")
+        self.assertIsNone(payload["session"]["audio"]["input"]["turn_detection"])
+        self.assertEqual(
+            payload["session"]["backdoor_options"],
+            {"juice": 64, "verbosity": 2},
+        )
+
+    def test_openai_realtime_manual_turn_handling_treats_null_turn_detection_as_disabled(self):
+        service = OpenAIRealtimeLLMServiceExplicitToolResult.__new__(
+            OpenAIRealtimeLLMServiceExplicitToolResult
+        )
+        service._session_properties = SimpleNamespace(
+            audio=rt_events.AudioConfiguration(
+                input=rt_events.AudioInput(turn_detection=None)
+            )
+        )
+
+        self.assertTrue(service._manual_turn_handling_active())
+
+    def test_ws_event_sanitizer_truncates_large_audio_payloads(self):
+        payload = {
+            "type": "input_audio_buffer.append",
+            "audio": "A" * 500,
+            "nested": {"delta": "B" * 400},
+            "small_delta": "ok",
+        }
+
+        sanitized = OpenAIRealtimeLLMServiceExplicitToolResult._sanitize_ws_event_payload(
+            payload
+        )
+
+        self.assertEqual(sanitized["type"], "input_audio_buffer.append")
+        self.assertEqual(sanitized["small_delta"], "ok")
+        self.assertEqual(sanitized["audio"]["length"], 500)
+        self.assertTrue(sanitized["audio"]["__truncated__"])
+        self.assertEqual(sanitized["nested"]["delta"]["length"], 400)
 
 
 if __name__ == "__main__":

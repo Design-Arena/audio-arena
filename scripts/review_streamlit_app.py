@@ -1,5 +1,6 @@
 import argparse
 import json
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -44,7 +45,12 @@ def find_default_input_path() -> str:
 
 def parse_run_timestamp(path: Path) -> datetime:
     run_id = path.name
-    timestamp = run_id.split("_", 1)[0]
+    match = re.search(r"\d{8}T\d{6}", run_id)
+    if not match:
+        raise ValueError(
+            f"Could not find a timestamp like YYYYMMDDTHHMMSS in '{run_id}'"
+        )
+    timestamp = match.group(0)
     return datetime.strptime(timestamp, TIMESTAMP_FORMAT)
 
 

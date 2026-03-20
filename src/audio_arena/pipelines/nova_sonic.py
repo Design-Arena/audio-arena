@@ -1294,6 +1294,8 @@ class NovaSonicPipeline:
         turn_indices=None,
         rehydration_turns=None,
         disable_vad: bool = False,
+        juice: int | None = None,
+        verbosity: int | None = None,
     ) -> None:
         """Run the complete benchmark.
 
@@ -1308,6 +1310,8 @@ class NovaSonicPipeline:
                 history is appended to the system instruction, and only the target turn(s)
                 specified by ``turn_indices`` are executed live.
             disable_vad: Ignored for Nova Sonic.
+            juice: Ignored for Nova Sonic.
+            verbosity: Ignored for Nova Sonic.
         """
         import os
         import soundfile as sf

@@ -485,13 +485,11 @@ turns = [
  'audio_file': 'audio/turn_029.wav'},
 
 # Turn 30 — Final goodbye + end session
-{'input': "Sounds good. Let's go ahead and place the order. Thanks "
-          "for all the help!",
- 'golden_text': "Order placed! You'll receive a confirmation at "
-                "201-473-1565. With next-day shipping, the ProBook "
-                "X1940 should arrive tomorrow if ordered before 2 PM "
-                "Eastern. Your daughter's going to love it for her CS "
-                "and video editing work. Have a great day!",
+{'input': "That all sounds good. I think I'm set for now. Thanks for "
+          "all the help!",
+ 'golden_text': "You're all set with the ProBook X1940 in your cart "
+                "with accidental damage protection. Thanks for calling "
+                "TechMart, and have a great day!",
  'required_function_call': {'name': 'end_session', 'args': {}},
  'categories': ['tool_use'],
  'audio_file': 'audio/turn_030.wav'},

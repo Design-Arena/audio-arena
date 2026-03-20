@@ -15,7 +15,7 @@ import os
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import click
 from dotenv import load_dotenv
@@ -181,6 +181,105 @@ def infer_pipeline(model: str) -> str:
     if "nova-sonic" in m or "nova_sonic" in m:
         return "nova-sonic"
     return "text"
+
+
+def turn_uses_oracle_post_tool_continuation(
+    *,
+    pipeline_type: str,
+    turn: dict[str, Any],
+) -> bool:
+    """Return True for rehydrated single-call realtime turns using the split flow."""
+    required_call = turn.get("required_function_call")
+    return (
+        pipeline_type in {"realtime", "grok-realtime"}
+        and isinstance(required_call, dict)
+    )
+
+
+def build_oracle_continuation_history(
+    golden_history: Optional[list[dict[str, Any]]],
+    turn: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Return seeded history for the fresh oracle continuation session."""
+    history = list(golden_history or [])
+    history.append(
+        {
+            "input": turn.get("input", ""),
+            "required_function_call": turn.get("required_function_call"),
+            "function_call_response": turn.get("function_call_response"),
+            # Omit assistant text so the continuation session generates it fresh.
+            "golden_text": "",
+        }
+    )
+    return history
+
+
+def merge_oracle_continuation_artifacts(
+    *,
+    transcript_path: Path,
+    live_tool_capture: dict[str, Any],
+) -> None:
+    """Rewrite the single-turn transcript row with live + oracle metadata."""
+    if not transcript_path.exists():
+        raise RuntimeError(f"Missing continuation transcript: {transcript_path}")
+
+    lines = [
+        json.loads(line)
+        for line in transcript_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    if len(lines) != 1:
+        raise RuntimeError(
+            f"Expected exactly 1 transcript row in {transcript_path}, got {len(lines)}"
+        )
+
+    row = lines[0]
+    actual_tool_call = live_tool_capture.get("actual_tool_call")
+    actual_tool_result = live_tool_capture.get("actual_tool_result")
+    if actual_tool_call:
+        row["tool_calls"] = [actual_tool_call]
+    if actual_tool_result is not None:
+        row["tool_results"] = [
+            {
+                "name": actual_tool_call.get("name") if actual_tool_call else None,
+                "response": actual_tool_result,
+            }
+        ]
+
+    row["oracle_continuation"] = {
+        "used": True,
+        "tool_name_correct": live_tool_capture.get("tool_name_correct"),
+        "tool_args_correct": live_tool_capture.get("tool_args_correct"),
+        "tool_use_pass": live_tool_capture.get("tool_use_pass"),
+        "oracle_tool_calls": live_tool_capture.get("oracle_tool_calls", []),
+        "oracle_tool_results": live_tool_capture.get("oracle_tool_results", []),
+    }
+
+    transcript_path.write_text(
+        json.dumps(row, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+
+def build_missing_tool_capture(turn: dict[str, Any]) -> dict[str, Any]:
+    """Return a failed live tool-use verdict when no tool call was captured."""
+    required_call = turn.get("required_function_call")
+    oracle_calls = required_call if isinstance(required_call, list) else [required_call] if required_call else []
+    response = turn.get("function_call_response")
+    oracle_results = (
+        response
+        if isinstance(response, list)
+        else [response] if response is not None else []
+    )
+    return {
+        "actual_tool_call": None,
+        "actual_tool_result": None,
+        "tool_name_correct": False,
+        "tool_args_correct": False if required_call else None,
+        "tool_use_pass": False,
+        "oracle_tool_calls": oracle_calls,
+        "oracle_tool_results": oracle_results,
+    }
 
 
 def get_disable_vad_status_messages(
@@ -442,6 +541,18 @@ def cli():
     help="Disable server-side VAD for compatible realtime models (manual input_audio_buffer.commit/response.create flow).",
 )
 @click.option(
+    "--juice",
+    type=int,
+    default=None,
+    help="OpenAI Realtime backdoor reasoning-effort override.",
+)
+@click.option(
+    "--verbosity",
+    type=int,
+    default=None,
+    help="OpenAI Realtime backdoor verbosity override.",
+)
+@click.option(
     "--real-audio",
     "real_audio_speaker",
     default=None,
@@ -457,6 +568,8 @@ def run(
     rehydrate: bool,
     parallel: int,
     disable_vad: bool,
+    juice: Optional[int],
+    verbosity: Optional[int],
     real_audio_speaker: Optional[str],
     verbose: bool,
 ):
@@ -478,7 +591,7 @@ def run(
     if real_audio_speaker and real_audio_speaker.lower() == "all":
         _run_all_speakers(
             benchmark_name, model, service, pipeline, only_turns,
-            rehydrate, parallel, disable_vad, verbose,
+            rehydrate, parallel, disable_vad, juice, verbosity, verbose,
         )
         return
 
@@ -493,6 +606,8 @@ def run(
                 verbose,
                 parallel,
                 disable_vad=disable_vad,
+                juice=juice,
+                verbosity=verbosity,
                 real_audio_speaker=real_audio_speaker,
             )
         )
@@ -506,6 +621,8 @@ def run(
                 only_turns,
                 verbose,
                 disable_vad=disable_vad,
+                juice=juice,
+                verbosity=verbosity,
                 real_audio_speaker=real_audio_speaker,
             )
         )
@@ -520,6 +637,8 @@ def _run_all_speakers(
     rehydrate: bool,
     parallel: int,
     disable_vad: bool,
+    juice: Optional[int],
+    verbosity: Optional[int],
     verbose: bool,
 ):
     """Run the benchmark once per available real-audio speaker."""
@@ -546,6 +665,7 @@ def _run_all_speakers(
                 _run_rehydrated(
                     benchmark_name, model, service, pipeline, only_turns,
                     verbose, parallel, disable_vad=disable_vad,
+                    juice=juice, verbosity=verbosity,
                     real_audio_speaker=speaker,
                 )
             )
@@ -554,6 +674,7 @@ def _run_all_speakers(
                 _run(
                     benchmark_name, model, service, pipeline, only_turns,
                     verbose, disable_vad=disable_vad,
+                    juice=juice, verbosity=verbosity,
                     real_audio_speaker=speaker,
                 )
             )
@@ -630,6 +751,8 @@ async def _run(
     only_turns: Optional[str],
     verbose: bool,
     disable_vad: bool = False,
+    juice: Optional[int] = None,
+    verbosity: Optional[int] = None,
     real_audio_speaker: Optional[str] = None,
 ):
     """Async implementation of the run command."""
@@ -692,6 +815,8 @@ async def _run(
             service_name=service,
             turn_indices=turn_indices,
             disable_vad=disable_vad,
+            juice=juice,
+            verbosity=verbosity,
         )
         # Save audio source metadata
         runtime_path = run_dir / "runtime.json"
@@ -720,6 +845,8 @@ async def _run_rehydrated(
     verbose: bool,
     max_parallel: int = 1,
     disable_vad: bool = False,
+    juice: Optional[int] = None,
+    verbosity: Optional[int] = None,
     real_audio_speaker: Optional[str] = None,
 ):
     """Run benchmark in single-step rehydration mode.
@@ -785,6 +912,7 @@ async def _run_rehydrated(
     ):
         async with semaphore:
             golden_history = all_turns[:target_idx] if target_idx > 0 else None
+            target_turn = all_turns[target_idx]
             turn_run_dir = build_rehydrated_turn_run_dir(run_dir, target_idx, turn_dir_width)
             turn_run_dir.mkdir(parents=True, exist_ok=True)
             click.echo(
@@ -794,26 +922,93 @@ async def _run_rehydrated(
             )
 
             turn_sink_id = add_turn_logging_sink(turn_run_dir)
-            turn_benchmark = BenchmarkConfig()
-            if real_audio_speaker:
-                _setup_real_audio(turn_benchmark, real_audio_speaker)
-            recorder = TranscriptRecorder(turn_run_dir, model)
-            pipeline_instance = pipeline_cls(turn_benchmark)
+            use_oracle_split = turn_uses_oracle_post_tool_continuation(
+                pipeline_type=pipeline_type,
+                turn=target_turn,
+            )
 
             try:
                 with logger.contextualize(
                     rehydration_turn_dir=str(turn_run_dir),
                     rehydration_target_turn=target_idx,
                 ):
-                    await pipeline_instance.run(
-                        recorder=recorder,
-                        model=model,
-                        service_class=service_class,
-                        service_name=service,
-                        turn_indices=[target_idx],
-                        rehydration_turns=golden_history,
-                        disable_vad=disable_vad,
-                    )
+                    if use_oracle_split:
+                        capture_run_dir = turn_run_dir / "tool_capture"
+                        capture_benchmark = BenchmarkConfig()
+                        if real_audio_speaker:
+                            _setup_real_audio(capture_benchmark, real_audio_speaker)
+                        capture_recorder = TranscriptRecorder(capture_run_dir, model)
+                        capture_pipeline = pipeline_cls(capture_benchmark)
+
+                        try:
+                            await capture_pipeline.run(
+                                recorder=capture_recorder,
+                                model=model,
+                                service_class=service_class,
+                                service_name=service,
+                                turn_indices=[target_idx],
+                                rehydration_turns=golden_history,
+                                disable_vad=disable_vad,
+                                juice=juice,
+                                verbosity=verbosity,
+                                stop_after_first_tool_call=True,
+                            )
+                        finally:
+                            capture_recorder.close()
+
+                        live_tool_capture = (
+                            capture_pipeline.get_captured_tool_phase()
+                            or build_missing_tool_capture(target_turn)
+                        )
+
+                        continuation_benchmark = BenchmarkConfig()
+                        if real_audio_speaker:
+                            _setup_real_audio(continuation_benchmark, real_audio_speaker)
+                        continuation_recorder = TranscriptRecorder(turn_run_dir, model)
+                        continuation_pipeline = pipeline_cls(continuation_benchmark)
+                        try:
+                            await continuation_pipeline.run(
+                                recorder=continuation_recorder,
+                                model=model,
+                                service_class=service_class,
+                                service_name=service,
+                                turn_indices=[target_idx],
+                                rehydration_turns=build_oracle_continuation_history(
+                                    golden_history,
+                                    target_turn,
+                                ),
+                                disable_vad=disable_vad,
+                                juice=juice,
+                                verbosity=verbosity,
+                                oracle_continuation_only=True,
+                            )
+                        finally:
+                            continuation_recorder.close()
+
+                        merge_oracle_continuation_artifacts(
+                            transcript_path=turn_run_dir / "transcript.jsonl",
+                            live_tool_capture=live_tool_capture,
+                        )
+                    else:
+                        turn_benchmark = BenchmarkConfig()
+                        if real_audio_speaker:
+                            _setup_real_audio(turn_benchmark, real_audio_speaker)
+                        recorder = TranscriptRecorder(turn_run_dir, model)
+                        pipeline_instance = pipeline_cls(turn_benchmark)
+                        try:
+                            await pipeline_instance.run(
+                                recorder=recorder,
+                                model=model,
+                                service_class=service_class,
+                                service_name=service,
+                                turn_indices=[target_idx],
+                                rehydration_turns=golden_history,
+                                disable_vad=disable_vad,
+                                juice=juice,
+                                verbosity=verbosity,
+                            )
+                        finally:
+                            recorder.close()
                 results[target_idx] = {
                     "success": True,
                     "turn_run_dir": str(turn_run_dir),
@@ -833,7 +1028,6 @@ async def _run_rehydrated(
                     "error": str(e),
                 }
             finally:
-                recorder.close()
                 logger.remove(turn_sink_id)
 
     semaphore = asyncio.Semaphore(max_parallel)

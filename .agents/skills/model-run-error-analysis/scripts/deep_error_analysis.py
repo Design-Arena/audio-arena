@@ -233,6 +233,30 @@ def model_name_from_rows(run_rows: list[dict], run_dir: Path) -> str:
     return run_dir.name
 
 
+def build_run_payloads(run_dirs: list[Path]) -> dict[str, list[dict]]:
+    base_names: list[str] = []
+    loaded_rows: list[list[dict]] = []
+
+    for run_dir in run_dirs:
+        run_rows = load_rows(run_dir)
+        loaded_rows.append(run_rows)
+        base_names.append(model_name_from_rows(run_rows, run_dir))
+
+    name_counts = Counter(base_names)
+    seen_counts: Counter[str] = Counter()
+    run_payloads: dict[str, list[dict]] = {}
+
+    for run_dir, run_rows, base_name in zip(run_dirs, loaded_rows, base_names, strict=True):
+        if name_counts[base_name] == 1:
+            run_label = base_name
+        else:
+            seen_counts[base_name] += 1
+            run_label = f"{base_name} run {seen_counts[base_name]} ({run_dir.name})"
+        run_payloads[run_label] = run_rows
+
+    return run_payloads
+
+
 def shared_turn_analysis(run_payloads: dict[str, list[dict]]) -> tuple[list[int], dict[str, dict[str, list[int]]]]:
     failed_turns_by_model: dict[str, set[int]] = {}
     for model_name, run_rows in run_payloads.items():
@@ -389,10 +413,7 @@ def write_report(
 def main() -> None:
     args = parse_args()
     run_dirs = load_run_dirs(args)
-    run_payloads: dict[str, list[dict]] = {}
-    for run_dir in run_dirs:
-        run_rows = load_rows(run_dir)
-        run_payloads[model_name_from_rows(run_rows, run_dir)] = run_rows
+    run_payloads = build_run_payloads(run_dirs)
 
     if args.output is not None:
         output_path = args.output.expanduser().resolve()

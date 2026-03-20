@@ -44,7 +44,7 @@ except ImportError:
 # ============================================================================
 
 JUDGE_VERSION = "claude-agent-sdk-v18-kb-visible-vs-tool-only"
-REHYDRATED_JUDGE_VERSION = "claude-agent-sdk-v18-rehydrated-kb-visible-vs-tool-only"
+REHYDRATED_JUDGE_VERSION = "claude-agent-sdk-v19-rehydrated-oracle-continuation"
 JUDGE_MODEL = "claude-opus-4-5"
 
 # System prompt for the two-phase judge
@@ -469,6 +469,7 @@ Remember:
 - For target turn N, only Golden Turns with index < N count as prior state. Golden Turns with index >= N are future turns for that target and must be ignored
 - Do NOT mark tool_use_correct=TRUE because the expected call happened in another actual transcript turn
 - Do NOT retroactively credit a turn because a function was called later in a different actual transcript turn
+- If a target turn includes an `Oracle Continuation` note, score `tool_use_correct` from the live `Actual Functions` and live tool-capture result only, but score `instruction_following`, `kb_grounding`, `ambiguity_handling`, and `state_tracking` against the `Oracle Seeded Tool Calls` / `Oracle Seeded Tool Results`. Treat the oracle-seeded tool state as the source of truth for the assistant response on that turn.
 - **Penalty absorption rule**: When a tool call is missed due to a more specific root cause within the same turn, the penalty lands on the specific dimension (ambiguity_handling or state_tracking) if it's in Score Dimensions. If the specific dimension is NOT in Score Dimensions, fall back to tool_use_correct=FALSE. The penalty must always land somewhere.
 - Missing/wrong tool call (not over-clarification or state failure) → tool_use_correct=FALSE only; do not fail instruction_following
 - Words contradict actions (e.g. says "I'll wait" but calls in same turn) → tool_use_correct=FALSE and instruction_following=FALSE
@@ -824,6 +825,15 @@ def format_rehydrated_turns_for_judge(
             lines.append(
                 f"**Hydrated Prior Context**: Golden Turns 0-{turn_idx - 1} from the shared hydrated history above"
             )
+        oracle_continuation = rec.get("oracle_continuation", {})
+        if oracle_continuation.get("used"):
+            lines.append(
+                "**Oracle Continuation**: Assistant text below was generated in a fresh session "
+                "seeded with the GT current-turn tool call/result. Judge tool_use_correct from "
+                "the live Actual Functions. For instruction_following, kb_grounding, ambiguity_handling, "
+                "and state_tracking, use the Oracle Seeded Tool Calls/Results below as the "
+                "source of truth for the assistant response."
+            )
         lines.append(f"**User**: {rec['user_text']}")
         lines.append(f"**Assistant**: {rec['assistant_text']}")
         lines.append("")
@@ -865,11 +875,35 @@ def format_rehydrated_turns_for_judge(
         else:
             lines.append("**Actual Functions**: none")
 
-        actual_results = rec.get("tool_results", [])
-        if actual_results:
-            lines.append(f"**Actual Function Results**: {json.dumps(actual_results)}")
+        if oracle_continuation.get("used"):
+            lines.append(
+                f"**Oracle Tool Name Correct**: {oracle_continuation.get('tool_name_correct')}"
+            )
+            lines.append(
+                f"**Oracle Tool Args Correct**: {oracle_continuation.get('tool_args_correct')}"
+            )
+            lines.append(
+                f"**Oracle Tool Use Pass**: {oracle_continuation.get('tool_use_pass')}"
+            )
+            lines.append(
+                f"**Oracle Seeded Tool Calls**: {json.dumps(oracle_continuation.get('oracle_tool_calls', []))}"
+            )
+            lines.append(
+                f"**Oracle Seeded Tool Results**: {json.dumps(oracle_continuation.get('oracle_tool_results', []))}"
+            )
+            actual_results = rec.get("tool_results", [])
+            if actual_results:
+                lines.append(
+                    f"**Live Tool Capture Results (tool_use_correct only)**: {json.dumps(actual_results)}"
+                )
+            else:
+                lines.append("**Live Tool Capture Results (tool_use_correct only)**: none")
         else:
-            lines.append("**Actual Function Results**: none")
+            actual_results = rec.get("tool_results", [])
+            if actual_results:
+                lines.append(f"**Actual Function Results**: {json.dumps(actual_results)}")
+            else:
+                lines.append("**Actual Function Results**: none")
 
         lines.append("")
         lines.append("---")
