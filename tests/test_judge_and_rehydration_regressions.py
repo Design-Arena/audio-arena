@@ -1,3 +1,4 @@
+import asyncio
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -18,12 +19,15 @@ from audio_arena.judging.llm_judge import (
     write_outputs,
 )
 from audio_arena.cli import (
+    build_live_tool_capture_from_transcript,
     build_missing_tool_capture,
     build_oracle_continuation_history,
     merge_oracle_continuation_artifacts,
     turn_uses_oracle_post_tool_continuation,
 )
 from benchmarks.appointment_bench.turns import turns as appointment_turns
+from benchmarks.assistant_bench.turns import turns as assistant_turns
+from benchmarks.conversation_bench.turns import turns as conversation_turns
 from audio_arena.pipelines.openai_realtime import OpenAIRealtimeLLMServiceExplicitToolResult
 from audio_arena.pipelines.realtime import RealtimePipeline
 from audio_arena.pipelines.text import TextPipeline
@@ -57,6 +61,24 @@ class JudgeAndRehydrationRegressionTests(unittest.TestCase):
                     "student_discount": False,
                 },
             },
+        )
+
+    def test_freeform_gt_args_are_trimmed_for_subset_matching(self):
+        self.assertEqual(
+            assistant_turns[6]["required_function_call"]["args"],
+            {"to": "alex.reed@meridian.com"},
+        )
+        self.assertEqual(
+            assistant_turns[13]["required_function_call"]["args"],
+            {"to": "maria.torres@meridian.com"},
+        )
+        self.assertEqual(
+            conversation_turns[10]["required_function_call"]["args"],
+            {"name": "Jennifer Smith"},
+        )
+        self.assertEqual(
+            conversation_turns[15]["required_function_call"]["args"],
+            {"name": "Jennifer Smith"},
         )
 
     def test_multi_call_tool_responses_match_by_args_not_call_order(self):
@@ -169,6 +191,53 @@ class JudgeAndRehydrationRegressionTests(unittest.TestCase):
         self.assertEqual(result["called_function"], "search_venues")
         self.assertEqual(result["expected_function"], "search_venues")
 
+    def test_subset_matching_allows_extra_freeform_tool_args(self):
+        benchmark = DummyBenchmark()
+        benchmark.turns = [
+            {
+                "input": "email maria",
+                "required_function_call": {
+                    "name": "send_email",
+                    "args": {"to": "maria.torres@meridian.com"},
+                },
+                "function_call_response": {"status": "success", "message_id": "MSG-1"},
+            }
+        ]
+        pipeline = TextPipeline(benchmark)
+
+        result = pipeline._get_turn_tool_response(
+            "send_email",
+            {
+                "to": "maria.torres@meridian.com",
+                "subject": "Horizon Project Deadline Update — Correction",
+                "body": "Hi Maria, correction to my last email. The deadline is February 15th.",
+            },
+        )
+
+        self.assertEqual(result, {"status": "success", "message_id": "MSG-1"})
+
+    def test_subset_matching_still_requires_expected_fields(self):
+        benchmark = DummyBenchmark()
+        benchmark.turns = [
+            {
+                "input": "email maria",
+                "required_function_call": {
+                    "name": "send_email",
+                    "args": {"to": "maria.torres@meridian.com", "subject": "Required subject"},
+                },
+                "function_call_response": {"status": "success", "message_id": "MSG-1"},
+            }
+        ]
+        pipeline = TextPipeline(benchmark)
+
+        result = pipeline._get_turn_tool_response(
+            "send_email",
+            {"to": "maria.torres@meridian.com"},
+        )
+
+        self.assertEqual(result["status"], "error")
+        self.assertEqual(result["error_code"], "ARG_MISMATCH")
+
     def test_end_session_without_scripted_response_uses_implicit_success(self):
         benchmark = DummyBenchmark()
         benchmark.turns = [
@@ -186,6 +255,155 @@ class JudgeAndRehydrationRegressionTests(unittest.TestCase):
         result = pipeline._get_turn_tool_response("end_session", {})
 
         self.assertEqual(result, {"status": "success"})
+
+    def test_oracle_post_tool_continuation_applies_to_multi_call_realtime_turns(self):
+        turn = {
+            "input": "do both actions",
+            "required_function_call": [
+                {"name": "tool_a", "args": {"value": "1"}},
+                {"name": "tool_b", "args": {"value": "2"}},
+            ],
+            "function_call_response": [
+                {"status": "success"},
+                {"status": "success"},
+            ],
+        }
+
+        self.assertTrue(
+            turn_uses_oracle_post_tool_continuation(
+                pipeline_type="realtime",
+                turn=turn,
+            )
+        )
+
+    def test_build_live_tool_capture_from_transcript_for_multi_call_turn(self):
+        turn = {
+            "input": "do both actions",
+            "required_function_call": [
+                {"name": "tool_a", "args": {"value": "1"}},
+                {"name": "tool_b", "args": {"value": "2"}},
+            ],
+            "function_call_response": [
+                {"status": "success"},
+                {"status": "error", "error_code": "SESSION_FULL"},
+            ],
+        }
+
+        with TemporaryDirectory() as tmpdir:
+            transcript_path = Path(tmpdir) / "transcript.jsonl"
+            transcript_path.write_text(
+                json.dumps(
+                    {
+                        "turn": 0,
+                        "user_text": turn["input"],
+                        "assistant_text": "handled",
+                        "tool_calls": [
+                            {"name": "tool_a", "args": {"value": "1"}},
+                            {"name": "tool_b", "args": {"value": "2"}},
+                        ],
+                        "tool_results": [
+                            {"name": "tool_a", "response": {"status": "success"}},
+                            {
+                                "name": "tool_b",
+                                "response": {
+                                    "status": "error",
+                                    "error_code": "SESSION_FULL",
+                                },
+                            },
+                        ],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            capture = build_live_tool_capture_from_transcript(
+                turn=turn,
+                transcript_path=transcript_path,
+            )
+
+        self.assertTrue(capture["tool_name_correct"])
+        self.assertTrue(capture["tool_args_correct"])
+        self.assertTrue(capture["tool_use_pass"])
+        self.assertEqual(len(capture["actual_tool_calls"]), 2)
+        self.assertEqual(
+            capture["oracle_tool_results"][1]["error_code"],
+            "SESSION_FULL",
+        )
+
+    def test_merge_oracle_continuation_artifacts_preserves_multi_call_live_capture(self):
+        with TemporaryDirectory() as tmpdir:
+            transcript_path = Path(tmpdir) / "transcript.jsonl"
+            transcript_path.write_text(
+                json.dumps(
+                    {
+                        "turn": 38,
+                        "user_text": "register me with fallback",
+                        "assistant_text": "oracle continuation answer",
+                        "tool_calls": [],
+                        "tool_results": [],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            merge_oracle_continuation_artifacts(
+                transcript_path=transcript_path,
+                live_tool_capture={
+                    "actual_tool_calls": [
+                        {
+                            "name": "register_for_session",
+                            "args": {"name": "Jennifer Smith", "session_id": "923101"},
+                        },
+                        {
+                            "name": "register_for_session",
+                            "args": {"name": "Jennifer Smith", "session_id": "923103"},
+                        },
+                    ],
+                    "actual_tool_results": [
+                        {
+                            "name": "register_for_session",
+                            "response": {
+                                "status": "error",
+                                "error_code": "SESSION_FULL",
+                            },
+                        },
+                        {
+                            "name": "register_for_session",
+                            "response": {
+                                "status": "error",
+                                "error_code": "SESSION_FULL",
+                            },
+                        },
+                    ],
+                    "tool_name_correct": True,
+                    "tool_args_correct": True,
+                    "tool_use_pass": True,
+                    "oracle_tool_calls": [
+                        {
+                            "name": "register_for_session",
+                            "args": {"name": "Jennifer Smith", "session_id": "923101"},
+                        },
+                        {
+                            "name": "register_for_session",
+                            "args": {"name": "Jennifer Smith", "session_id": "923103"},
+                        },
+                    ],
+                    "oracle_tool_results": [
+                        {"status": "error", "error_code": "SESSION_FULL"},
+                        {"status": "error", "error_code": "SESSION_FULL"},
+                    ],
+                },
+            )
+
+            merged = json.loads(transcript_path.read_text(encoding="utf-8").strip())
+
+        self.assertEqual(len(merged["tool_calls"]), 2)
+        self.assertEqual(merged["tool_calls"][1]["args"]["session_id"], "923103")
+        self.assertEqual(len(merged["tool_results"]), 2)
+        self.assertTrue(merged["oracle_continuation"]["used"])
+        self.assertTrue(merged["oracle_continuation"]["tool_use_pass"])
 
     def test_time_args_match_when_hour_zero_padding_differs(self):
         benchmark = DummyBenchmark()
@@ -721,7 +939,7 @@ class JudgeAndRehydrationRegressionTests(unittest.TestCase):
                 len(turn["function_call_response"]),
             )
 
-    def test_turn_uses_oracle_post_tool_continuation_only_for_single_call_realtime_turns(self):
+    def test_turn_uses_oracle_post_tool_continuation_for_any_realtime_tool_turn(self):
         self.assertTrue(
             turn_uses_oracle_post_tool_continuation(
                 pipeline_type="realtime",
@@ -730,7 +948,7 @@ class JudgeAndRehydrationRegressionTests(unittest.TestCase):
                 },
             )
         )
-        self.assertFalse(
+        self.assertTrue(
             turn_uses_oracle_post_tool_continuation(
                 pipeline_type="realtime",
                 turn={
@@ -748,6 +966,67 @@ class JudgeAndRehydrationRegressionTests(unittest.TestCase):
                 },
             )
         )
+
+    def test_realtime_aborts_after_unexpected_tool_call_on_no_tool_turn(self):
+        pipeline = RealtimePipeline(DummyBenchmark())
+        pipeline.turns = [{"input": "what time does it start?", "required_function_call": None}]
+        pipeline._rehydration_turns = [{"input": "earlier turn", "golden_text": "earlier answer"}]
+        pipeline._captured_tool_phase = {
+            "actual_tool_calls": [{"name": "lookup_item", "args": {"query": "flowers"}}],
+            "actual_tool_result": {
+                "status": "error",
+                "error_code": "UNEXPECTED_TOOL_CALL",
+            },
+        }
+
+        self.assertTrue(pipeline.should_abort_after_tool_capture())
+
+    def test_realtime_does_not_abort_after_unexpected_tool_call_on_non_rehydrated_turn(self):
+        pipeline = RealtimePipeline(DummyBenchmark())
+        pipeline.turns = [{"input": "what time does it start?", "required_function_call": None}]
+        pipeline._captured_tool_phase = {
+            "actual_tool_calls": [{"name": "lookup_item", "args": {"query": "flowers"}}],
+            "actual_tool_result": {
+                "status": "error",
+                "error_code": "UNEXPECTED_TOOL_CALL",
+            },
+        }
+
+        self.assertFalse(pipeline.should_abort_after_tool_capture())
+
+    def test_realtime_does_not_abort_after_expected_tool_call_during_normal_turn(self):
+        pipeline = RealtimePipeline(DummyBenchmark())
+        pipeline.turns = [
+            {
+                "input": "book the event",
+                "required_function_call": {
+                    "name": "book_event",
+                    "args": {"name": "Priya"},
+                },
+            }
+        ]
+        pipeline._captured_tool_phase = {
+            "actual_tool_calls": [{"name": "book_event", "args": {"name": "Priya"}}],
+            "actual_tool_result": {"status": "success"},
+        }
+
+        self.assertFalse(pipeline.should_abort_after_tool_capture())
+
+    def test_no_tool_rehydrated_tool_result_suppresses_followup_llm(self):
+        pipeline = RealtimePipeline(DummyBenchmark())
+        pipeline.turns = [{"input": "what time does it start?", "required_function_call": None}]
+        pipeline._rehydration_turns = [{"input": "earlier turn", "golden_text": "earlier answer"}]
+        params = SimpleNamespace(
+            function_name="lookup_item",
+            tool_call_id="call_1",
+            arguments={"query": "flowers"},
+            result_callback=AsyncMock(),
+        )
+
+        asyncio.run(pipeline._function_catchall(params))
+
+        _, kwargs = params.result_callback.await_args
+        self.assertEqual(kwargs["properties"].run_llm, False)
 
     def test_build_oracle_continuation_history_appends_current_turn_without_assistant(self):
         history = build_oracle_continuation_history(

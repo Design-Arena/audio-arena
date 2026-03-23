@@ -113,9 +113,7 @@ turns = [
                 "the subject 'Meeting Agenda' and the body you "
                 "dictated. Done!",
  'required_function_call': {'name': 'send_email',
-                            'args': {'to': 'alex.reed@meridian.com',
-                                     'subject': 'Meeting Agenda',
-                                     'body': 'Hi Alex, I\'ll be in New York on February 3rd for our meeting. Can you put together the agenda and share it by end of week? Main topics should be Q4 results and the new product roadmap. Thanks, Dana.'}},
+                            'args': {'to': 'alex.reed@meridian.com'}},
  'function_call_response': {'status': 'success',
                             'message_id': 'MSG-4401'},
  'categories': ['tool_use', 'long_range_memory'],
@@ -200,13 +198,11 @@ turns = [
                 "maria.torres@meridian.com about the Horizon project.",
  'required_function_call': [
      {'name': 'set_reminder',
-      'args': {'date': '2025-02-02',
+     'args': {'date': '2025-02-02',
                'time': '20:00',
                'message': 'Pack bag for NYC trip'}},
      {'name': 'send_email',
-      'args': {'to': 'maria.torres@meridian.com',
-               'subject': 'Horizon Project Deadline Update',
-               'body': 'Hi Maria, the Horizon project deadline is moving to February 14th. I\'ll send the updated timeline by Thursday. Best, Dana.'}},
+      'args': {'to': 'maria.torres@meridian.com'}},
  ],
  'function_call_response': [
      {'status': 'success', 'reminder_id': 'REM-0501'},
@@ -221,12 +217,7 @@ turns = [
  'golden_text': "Got it — resending to Maria Torres with the corrected "
                 "deadline of February 15th instead of the 14th.",
  'required_function_call': {'name': 'send_email',
-                            'args': {'to': 'maria.torres@meridian.com',
-                                     'subject': 'Horizon Project Deadline Update — Correction',
-                                     'body': "Hi Maria, correction to my last email — the Horizon "
-                                             "project deadline is moving to February 15th, not the "
-                                             "14th. I'll send the updated timeline by Thursday. "
-                                             "Best, Dana."}},
+                            'args': {'to': 'maria.torres@meridian.com'}},
  'function_call_response': {'status': 'success',
                             'message_id': 'MSG-4403'},
  'categories': ['tool_use', 'long_range_memory', 'implicit_correction'],
@@ -321,9 +312,7 @@ turns = [
  'golden_text': "Email sent to Alex Reed — 'Q4 Reports for NYC Meeting' "
                 "reminding him to bring the Q4 reports.",
  'required_function_call': {'name': 'send_email',
-                            'args': {'to': 'alex.reed@meridian.com',
-                                     'subject': 'Q4 Reports for NYC Meeting',
-                                     'body': 'Hi Alex, just a reminder to bring the Q4 reports to our NYC meeting on February 3rd. Thanks, Dana.'}},
+                            'args': {'to': 'alex.reed@meridian.com'}},
  'function_call_response': {'status': 'success',
                             'message_id': 'MSG-4404'},
  'categories': ['tool_use', 'long_range_memory'],
@@ -376,11 +365,7 @@ turns = [
  'golden_text': "Sent the corrected Horizon deadline email to Priya Kapoor "
                 "at priya.kapoor@meridian.com.",
  'required_function_call': {'name': 'send_email',
-                            'args': {'to': 'priya.kapoor@meridian.com',
-                                     'subject': 'Horizon Project Deadline Update',
-                                     'body': "Hi Priya, the Horizon project deadline is moving to "
-                                             "February 15th. I'll send the updated timeline by "
-                                             "Thursday. Best, Dana."}},
+                            'args': {'to': 'priya.kapoor@meridian.com'}},
  'function_call_response': {'status': 'success',
                             'message_id': 'MSG-4405'},
  'categories': ['tool_use', 'long_range_memory'],

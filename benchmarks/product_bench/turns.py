@@ -381,10 +381,10 @@ turns = [
 # Turn 23 — MERGED: shipping question + pick express (tool call)
 {'input': "No worries. What are the shipping options? Just go with "
           "express — that's the two to three day one, right?",
- 'golden_text': "Yes — express shipping is $19.99, 2 to 3 business "
-                "days. We also have free standard in 5 to 7 days and "
-                "next-day for $34.99. I'll add express. Your new total "
-                "is $1,297.99.",
+ 'golden_text': "Yes — express shipping is $19.99 and takes 2 to 3 "
+                "business days. We also have free standard in 5 to 7 days "
+                "and next-day for $34.99. I've updated your cart to express "
+                "shipping, and your new total is $1,297.99.",
  'required_function_call': {'name': 'update_cart',
                             'args': {'cart_id': 'CART-5501',
                                      'field': 'shipping',
@@ -488,8 +488,8 @@ turns = [
 {'input': "That all sounds good. I think I'm set for now. Thanks for "
           "all the help!",
  'golden_text': "You're all set with the ProBook X1940 in your cart "
-                "with accidental damage protection. Thanks for calling "
-                "TechMart, and have a great day!",
+                "with the 3-year extended warranty and next-day shipping. "
+                "Thanks for calling TechMart, and have a great day!",
  'required_function_call': {'name': 'end_session', 'args': {}},
  'categories': ['tool_use'],
  'audio_file': 'audio/turn_030.wav'},

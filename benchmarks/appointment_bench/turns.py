@@ -64,7 +64,7 @@ turns = [
 # Turn 3 — Tool call: check availability for both doctors on one date
 {'input': "Monday's fine. I need morning for my cleaning — before eleven. "
           "And Danielle can't come until after three.",
- 'golden_text': "Let me check Monday availability. Dr. Perry has morning "
+ 'golden_text': "I checked Monday availability. Dr. Perry has morning "
                 "slots at 9:00, 9:15, and 10:30 AM for your cleaning. For "
                 "Danielle, Dr. Barry has afternoon openings at 3:15, 3:30, "
                 "3:45, and 4:00 PM. Which times would you like?",

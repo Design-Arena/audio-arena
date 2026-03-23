@@ -125,8 +125,7 @@ turns = [
  'golden_text': "Thank you, Jennifer! I've submitted your suggestion for a session on open "
                 'telemetry tracing. Is there anything else I can help you with today?',
  'required_function_call': {'name': 'submit_session_suggestion',
-                            'args': {'name': 'Jennifer Smith',
-                                     'suggestion_text': 'A session about open telemetry tracing.'}},
+                            'args': {'name': 'Jennifer Smith'}},
  'function_call_response': {'status': 'success'},
  'categories': ['tool_use'],
  'audio_file': 'audio/turn_010.wav'},
@@ -137,9 +136,7 @@ turns = [
                 'machine abstractions for complex workflows. Is there anything else I can help '
                 'you with today?',
  'required_function_call': {'name': 'submit_session_suggestion',
-                            'args': {'suggestion_text': 'A session on state machine abstractions '
-                                                        'for complex workflows.',
-                                     'name': 'Jennifer Smith'}},
+                            'args': {'name': 'Jennifer Smith'}},
  'function_call_response': {'status': 'success'},
  'categories': ['tool_use', 'long_range_memory'],
  'audio_file': 'audio/turn_011.wav'},
@@ -171,9 +168,7 @@ turns = [
                 'issue with accessing location maps on the mobile app. Someone from our tech team '
                 'will look into it. Is there anything else I can help you with?',
  'required_function_call': {'name': 'request_tech_support',
-                            'args': {'issue_description': 'Cannot access location maps on the '
-                                                          'mobile app.',
-                                     'name': 'Jennifer Smith'}},
+                            'args': {'name': 'Jennifer Smith'}},
  'function_call_response': {'status': 'success'},
  'categories': ['tool_use', 'long_range_memory'],
  'audio_file': 'audio/turn_015.wav'},
@@ -974,7 +969,7 @@ turns = [
 
 {'input': "I just wanted to say the conference was great. I don't have anything else.",
  'golden_text': "Thank you for your feedback, Jennifer! I'm so glad you enjoyed the conference. "
-                'Let me know if you need anything else.',
+                'Have a great rest of your day.',
  'required_function_call': {'name': 'end_session', 'args': {}},
  'categories': ['tool_use'],
  'audio_file': 'audio/turn_074.wav'}

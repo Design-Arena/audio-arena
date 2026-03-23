@@ -34,7 +34,11 @@ turns = [
 # Turn 1 — Tool call: search venues for date + guest count
 {'input': "We're looking at Saturday, March 8th. What venues do you have "
           "that could fit eighty people?",
- 'golden_text': "Let me search our venues for March 8th with eighty guests.",
+ 'golden_text': "For March 8th with eighty guests, the Garden Pavilion and "
+                "the Grand Ballroom are both available. The Rooftop Terrace "
+                "is also open that day, but it only holds 50 guests so it's "
+                "too small for your event. Would you like details on the "
+                "Garden Pavilion or the Grand Ballroom?",
  'required_function_call': {'name': 'search_venues',
                             'args': {'date': '2025-03-08',
                                      'guest_count': 80}},
@@ -123,9 +127,10 @@ turns = [
 {'input': "Let's go with the Platinum— actually no, the Gold package. At "
           "seventy-five per person for eighty guests. Can you give me a "
           "quote for that with the Garden Pavilion?",
- 'golden_text': "Got it — the Gold package, not Platinum. Let me get a "
-                "quote for the Garden Pavilion with eighty guests and Gold "
-                "catering.",
+ 'golden_text': "Got it — the Gold package, not Platinum. For the Garden "
+                "Pavilion with eighty guests and Gold catering, your quote "
+                "comes to $10,000 total: $4,000 for the venue and $6,000 "
+                "for catering. No add-ons are included yet.",
  'required_function_call': {'name': 'get_quote',
                             'args': {'venue_id': 'garden_pavilion',
                                      'guest_count': 80,
@@ -177,7 +182,9 @@ turns = [
           "Budget's tight. Just the DJ and photographer. Can I get an "
           "updated quote?",
  'golden_text': "Got it — DJ and photographer only, no floral arrangements. "
-                "Let me get an updated quote.",
+                "Your updated total is $12,000: $4,000 for the Garden "
+                "Pavilion, $6,000 for Gold catering, and $2,000 in add-ons "
+                "($800 for the DJ and $1,200 for the photographer).",
  'required_function_call': {'name': 'get_quote',
                             'args': {'venue_id': 'garden_pavilion',
                                      'guest_count': 80,
@@ -262,7 +269,10 @@ turns = [
 # Turn 14 — Updated quote after venue + guest count change
 {'input': "What does the total look like now with the bigger venue and "
           "more guests?",
- 'golden_text': "Let me get you an updated quote.",
+ 'golden_text': "With the Grand Ballroom, 120 guests, Gold catering, plus "
+                "the DJ and photographer, your updated total is $19,000: "
+                "$8,000 venue rental, $9,000 catering, and $2,000 in "
+                "add-ons.",
  'required_function_call': {'name': 'get_quote',
                             'args': {'venue_id': 'grand_ballroom',
                                      'guest_count': 120,
@@ -357,7 +367,9 @@ turns = [
 
 # Turn 20 — Get updated quote after downsizing
 {'input': "What's the new total?",
- 'golden_text': "Let me get you the updated quote.",
+ 'golden_text': "Your new total is $12,750: $4,000 for the Garden "
+                "Pavilion, $6,750 for Gold catering for ninety guests, and "
+                "$2,000 for the DJ and photographer.",
  'required_function_call': {'name': 'get_quote',
                             'args': {'venue_id': 'garden_pavilion',
                                      'guest_count': 90,
@@ -405,7 +417,9 @@ turns = [
 {'input': "And I just realized — March 8th actually conflicts with our "
           "company retreat. Can we move the whole thing to March 15th? "
           "Is the Garden Pavilion available that Saturday?",
- 'golden_text': "Let me check availability for March 15th.",
+ 'golden_text': "Yes — the Garden Pavilion is available on Saturday, March "
+                "15th for 90 guests. The Grand Ballroom is also available, "
+                "while the Rooftop Terrace is too small for your group.",
  'required_function_call': {'name': 'search_venues',
                             'args': {'date': '2025-03-15',
                                      'guest_count': 90}},
@@ -490,9 +504,8 @@ turns = [
 # Turn 28 — Closing: user confirms, end session
 {'input': "Perfect, that all sounds good. I'll get the deposit sorted out. "
           "Thanks so much for your help!",
- 'golden_text': "You're welcome, Priya! I'll send a confirmation to Raj "
-                "at 512-849-3016. Your event at the Garden Pavilion on "
-                "March 15th is all set. Have a great day!",
+ 'golden_text': "You're welcome, Priya! Your event at the Garden Pavilion "
+                "on March 15th is all set. Have a great day!",
  'required_function_call': {'name': 'end_session', 'args': {}},
  'categories': ['tool_use'],
  'audio_file': 'audio/turn_028.wav'},

@@ -128,6 +128,9 @@ def build_record(raw_record: dict) -> dict:
 
     tool_calls = raw_record.get("tool_calls", [])
     tool_results = raw_record.get("tool_results", [])
+    oracle_continuation = raw_record.get("oracle_continuation") or {}
+    oracle_tool_calls = oracle_continuation.get("oracle_tool_calls", [])
+    oracle_tool_results = oracle_continuation.get("oracle_tool_results", [])
     return {
         "turn": raw_record.get("turn"),
         "timestamp": raw_record.get("ts"),
@@ -142,6 +145,23 @@ def build_record(raw_record: dict) -> dict:
         "tool_results": tool_results,
         "tool_calls_text": json.dumps(tool_calls, ensure_ascii=False, indent=2),
         "tool_results_text": json.dumps(tool_results, ensure_ascii=False, indent=2),
+        "oracle_continuation": oracle_continuation,
+        "oracle_continuation_used": bool(oracle_continuation.get("used")),
+        "live_tool_name_correct": oracle_continuation.get("tool_name_correct"),
+        "live_tool_args_correct": oracle_continuation.get("tool_args_correct"),
+        "live_tool_use_pass": oracle_continuation.get("tool_use_pass"),
+        "oracle_tool_calls": oracle_tool_calls,
+        "oracle_tool_results": oracle_tool_results,
+        "oracle_tool_calls_text": json.dumps(
+            oracle_tool_calls,
+            ensure_ascii=False,
+            indent=2,
+        ),
+        "oracle_tool_results_text": json.dumps(
+            oracle_tool_results,
+            ensure_ascii=False,
+            indent=2,
+        ),
         "judge_reasoning": raw_record.get("judge_reasoning", ""),
         "scores": normalized_scores,
         "failed_dimensions": failed_dimensions,
@@ -1394,6 +1414,12 @@ def main() -> None:
         "golden_tool_calls_text",
         "golden_tool_results_text",
         "golden_context_block",
+        "oracle_continuation_used",
+        "live_tool_name_correct",
+        "live_tool_args_correct",
+        "live_tool_use_pass",
+        "oracle_tool_calls_text",
+        "oracle_tool_results_text",
     ]
     flattened_rows[csv_columns].to_csv(
         output_dir / "review_rows.csv",

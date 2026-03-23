@@ -550,7 +550,7 @@ turns = [
 
 # Turn 26 — Conditional removal by price: "anything over ten dollars"
 {'input': "Actually, take off anything over ten dollars.",
- 'golden_text': "Let me check your order — items over ten dollars per unit "
+ 'golden_text': "I checked your order — items over ten dollars per unit "
                 "are Extra Virgin Olive Oil at twelve ninety-nine, Raw Honey "
                 "at ten ninety-nine, Vanilla Extract at eleven ninety-nine, "
                 "and the Fresh Flower Bouquet at thirty-four ninety-nine. "
@@ -665,11 +665,10 @@ turns = [
 
 # Turn 29 — Closing: user confirms, end session
 {'input': "That's perfect. Thanks so much!",
- 'golden_text': "Your order ORD-5521 is confirmed! Delivery to 3840 "
+ 'golden_text': "Your order ORD-5521 is confirmed for delivery to 3840 "
                 "Willow Lane, Pasadena. Your total is one hundred eight "
-                "seventy-two. You'll receive a confirmation at "
-                "818-940-3670. Thank you for shopping with Harvest & "
-                "Hearth Market, Carmen. Have a great day!",
+                "seventy-two. Thank you for shopping with Harvest & Hearth "
+                "Market, Carmen. Have a great day!",
  'required_function_call': {'name': 'end_session', 'args': {}},
  'function_call_response': None,
  'categories': ['tool_use'],

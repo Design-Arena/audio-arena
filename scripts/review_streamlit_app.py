@@ -13,7 +13,12 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-from build_experiment_review import SCORE_COLUMNS, build_review_payload, turn_audio_path
+from build_experiment_review import (
+    SCORE_COLUMNS,
+    build_review_payload,
+    format_status,
+    turn_audio_path,
+)
 
 
 TIMESTAMP_FORMAT = "%Y%m%dT%H%M%S"
@@ -269,6 +274,8 @@ def apply_filters(
             "golden_tool_calls_text",
             "golden_tool_results_text",
             "golden_context_block",
+            "oracle_tool_calls_text",
+            "oracle_tool_results_text",
         ]:
             if optional_column in filtered_df.columns:
                 search_columns.append(optional_column)
@@ -288,6 +295,74 @@ def apply_filters(
         ascending=[True, False, True],
     ).drop(columns="_status_order")
     return filtered_df.reset_index(drop=True)
+
+
+def build_phase_review_rows(rows_df: pd.DataFrame) -> pd.DataFrame:
+    phase_rows: list[dict] = []
+    continuation_dimensions = [
+        "turn_taking",
+        "instruction_following",
+        "kb_grounding",
+        "ambiguity_handling",
+        "state_tracking",
+    ]
+
+    for row in rows_df.to_dict(orient="records"):
+        base_row = {
+            "turn": row["turn"],
+            "user_text": row["user_text"],
+            "assistant_text": row["assistant_text"],
+            "response_status": row["response_status"],
+            "latency_ms": row["latency_ms"],
+        }
+        if row.get("oracle_continuation_used"):
+            tool_pass = row.get("live_tool_use_pass")
+            tool_failed_dimensions = [] if tool_pass is not False else ["tool_use_correct"]
+            phase_rows.append(
+                {
+                    **base_row,
+                    "phase_key": f"{row['turn']}-tool",
+                    "phase_type": "tool_phase",
+                    "phase_label": "Tool Phase",
+                    "phase_status": format_status(tool_pass),
+                    "failed_dimensions_text": ", ".join(tool_failed_dimensions),
+                    "phase_focus": row.get("tool_calls_text", ""),
+                }
+            )
+
+            continuation_failed_dimensions = [
+                dimension
+                for dimension in continuation_dimensions
+                if row.get(dimension) is False
+            ]
+            phase_rows.append(
+                {
+                    **base_row,
+                    "phase_key": f"{row['turn']}-continuation",
+                    "phase_type": "post_tool_continuation",
+                    "phase_label": "Post-Tool Continuation",
+                    "phase_status": (
+                        "fail" if continuation_failed_dimensions else "pass"
+                    ),
+                    "failed_dimensions_text": ", ".join(continuation_failed_dimensions),
+                    "phase_focus": row.get("assistant_text", ""),
+                }
+            )
+            continue
+
+        phase_rows.append(
+            {
+                **base_row,
+                "phase_key": f"{row['turn']}-turn",
+                "phase_type": "turn",
+                "phase_label": "Turn",
+                "phase_status": row["overall_status"],
+                "failed_dimensions_text": row["failed_dimensions_text"],
+                "phase_focus": row.get("assistant_text", ""),
+            }
+        )
+
+    return pd.DataFrame(phase_rows)
 
 
 def format_previous_turns(previous_rows: pd.DataFrame) -> str:
@@ -337,6 +412,58 @@ def step_selected_turn(turn_options: list[int], step: int) -> None:
     current_index = turn_options.index(current_turn)
     next_index = max(0, min(len(turn_options) - 1, current_index + step))
     st.session_state["selected_turn"] = turn_options[next_index]
+
+
+def render_phase_split(selected_row: pd.Series) -> None:
+    tool_col, continuation_col = st.columns(2)
+
+    with tool_col:
+        st.markdown("**Tool Phase Datapoint**")
+        tool_phase_df = pd.DataFrame(
+            [
+                ["status", format_status(selected_row.get("live_tool_use_pass"))],
+                ["tool_name_correct", str(selected_row.get("live_tool_name_correct"))],
+                ["tool_args_correct", str(selected_row.get("live_tool_args_correct"))],
+            ],
+            columns=["field", "value"],
+        )
+        st.dataframe(tool_phase_df, use_container_width=True, hide_index=True)
+        st.caption("Expected tool calls")
+        st.json(json.loads(selected_row["golden_tool_calls_text"]))
+        st.caption("Live tool calls")
+        st.json(json.loads(selected_row["tool_calls_text"]))
+        st.caption("Live tool results")
+        st.json(json.loads(selected_row["tool_results_text"]))
+
+    with continuation_col:
+        st.markdown("**Post-Tool Continuation Datapoint**")
+        continuation_rows = []
+        for column in [
+            "turn_taking",
+            "instruction_following",
+            "kb_grounding",
+            "ambiguity_handling",
+            "state_tracking",
+        ]:
+            value = selected_row[column]
+            if pd.isna(value):
+                verdict = "n/a"
+            elif bool(value):
+                verdict = "pass"
+            else:
+                verdict = "fail"
+            continuation_rows.append({"dimension": column, "verdict": verdict})
+        st.dataframe(
+            pd.DataFrame(continuation_rows),
+            use_container_width=True,
+            hide_index=True,
+        )
+        st.caption("Oracle seeded tool calls")
+        st.json(json.loads(selected_row["oracle_tool_calls_text"]))
+        st.caption("Oracle seeded tool results")
+        st.json(json.loads(selected_row["oracle_tool_results_text"]))
+        st.caption("Continuation assistant output")
+        st.write(selected_row["assistant_text"])
 
 
 def build_dimension_pass_rate_df(payload: dict) -> pd.DataFrame:
@@ -504,6 +631,7 @@ def render_single_run_view(payload: dict, error_analysis: str, source_path: str)
         response_status=response_status,
         search_text=search_text,
     )
+    filtered_phase_rows_df = build_phase_review_rows(filtered_df)
 
     if filtered_df.empty:
         st.warning("No rows match the current filters.")
@@ -582,12 +710,13 @@ def render_single_run_view(payload: dict, error_analysis: str, source_path: str)
     is_first_filtered_turn = selected_turn_index == 0
     is_last_filtered_turn = selected_turn_index == len(turn_options) - 1
 
-    detail_tab, viz_tab, curated_tab, full_tab, summary_tab, analysis_tab = st.tabs(
+    detail_tab, viz_tab, curated_tab, full_tab, phase_tab, summary_tab, analysis_tab = st.tabs(
         [
             "Selected Turn",
             "Visualizations",
             "Curated Failures",
             "All Datapoints",
+            "Phase Datapoints",
             "Dimension Summary",
             "Error Analysis",
         ]
@@ -631,6 +760,12 @@ def render_single_run_view(payload: dict, error_analysis: str, source_path: str)
             st.info("No run-level conversation.wav found.")
         else:
             st.audio(conversation_audio_bytes, format="audio/wav")
+
+        if selected_row.get("oracle_continuation_used"):
+            st.info(
+                "This turn is rendered as two review datapoints below: a live tool phase and an oracle-seeded continuation phase."
+            )
+            render_phase_split(selected_row)
 
         content_col, detail_col = st.columns([3, 2])
 
@@ -742,6 +877,28 @@ def render_single_run_view(payload: dict, error_analysis: str, source_path: str)
                 [
                     "turn",
                     "overall_status",
+                    "response_status",
+                    "latency_ms",
+                    "failed_dimensions_text",
+                    "user_text",
+                    "assistant_text",
+                ]
+            ],
+            use_container_width=True,
+            hide_index=True,
+            height=620,
+        )
+
+    with phase_tab:
+        st.caption(
+            f"Showing {len(filtered_phase_rows_df)} review-phase rows derived from {len(filtered_df)} filtered turn rows. Tool-continuation turns expand into two UI datapoints."
+        )
+        st.dataframe(
+            filtered_phase_rows_df[
+                [
+                    "turn",
+                    "phase_label",
+                    "phase_status",
                     "response_status",
                     "latency_ms",
                     "failed_dimensions_text",

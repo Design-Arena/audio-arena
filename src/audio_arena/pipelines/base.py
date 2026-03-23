@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
 
-from pipecat.frames.frames import MetricsFrame
+from pipecat.frames.frames import FunctionCallResultProperties, MetricsFrame
 from pipecat.metrics.metrics import LLMUsageMetricsData, TTFBMetricsData
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineTask
@@ -241,14 +241,46 @@ class BasePipeline(ABC):
         return self._captured_tool_phase
 
     def should_abort_after_tool_capture(self) -> bool:
-        """Return True when realtime services should stop after the first tool call."""
-        return self._tool_capture_only and self._captured_tool_phase is not None
+        """Return True when realtime services should stop after the first tool call.
+
+        Two cases use the early-abort path:
+        - capture-only runs that intentionally stop after the live tool call
+        - turns where no tool call is expected at all
+
+        In the second case we still record the tool call for deterministic scoring,
+        but we do not send a tool result back into the session or let the model
+        continue from benchmark-generated error payloads.
+        """
+        if self._captured_tool_phase is None:
+            return False
+        if self._tool_capture_only:
+            return True
+        current_turn = self._get_current_turn()
+        return (
+            self._rehydration_turns is not None
+            and current_turn.get("required_function_call") is None
+        )
 
     async def abort_after_tool_capture(self) -> None:
         """Terminate a capture-only run once the live tool call is recorded."""
         if self.done:
             return
         logger.info("[ToolCapture] Aborting run after first live tool call capture")
+        current_turn = self._get_current_turn()
+        should_write_aborted_turn = (
+            not self._tool_capture_only
+            and self._rehydration_turns is not None
+            and current_turn.get("required_function_call") is None
+        )
+        if should_write_aborted_turn:
+            # Let tool-call frames reach the transcript recorder before persisting
+            # the aborted no-tool turn.
+            await asyncio.sleep(0.05)
+            self.recorder.write_turn(
+                user_text=current_turn.get("input", ""),
+                assistant_text="",
+            )
+            self.recorder.write_summary()
         self.done = True
         if self.task is not None:
             await self.task.cancel()
@@ -514,6 +546,12 @@ class BasePipeline(ABC):
         # Track this call
         self._seen_tool_calls.add(call_key)
 
+        current_turn = self._get_current_turn()
+        suppress_followup_llm = (
+            self._rehydration_turns is not None
+            and current_turn.get("required_function_call") is None
+        )
+
         result = self._get_turn_tool_response(
             params.function_name,
             params.arguments or {},
@@ -525,7 +563,12 @@ class BasePipeline(ABC):
                 params.arguments or {},
                 result,
             )
-        await params.result_callback(result)
+        callback_properties = (
+            FunctionCallResultProperties(run_llm=False)
+            if suppress_followup_llm
+            else None
+        )
+        await params.result_callback(result, properties=callback_properties)
 
         # end_session tool: gracefully terminate the run
         if params.function_name == "end_session":
@@ -607,9 +650,29 @@ class BasePipeline(ABC):
         expected_args: Dict[str, Any],
         actual_args: Dict[str, Any],
     ) -> bool:
-        """Return True for conservative semantic matches the runtime should accept."""
+        """Return True when the expected args are a conservative subset of actual args."""
         expected = cls._canonicalize_tool_arg_value(expected_args or {})
         actual = cls._canonicalize_tool_arg_value(actual_args or {})
+        return cls._tool_arg_value_matches(expected, actual)
+
+    @classmethod
+    def _tool_arg_value_matches(cls, expected: Any, actual: Any) -> bool:
+        """Compare canonicalized tool args with subset semantics for dicts."""
+        if isinstance(expected, dict):
+            if not isinstance(actual, dict):
+                return False
+            for key, expected_value in expected.items():
+                if key not in actual:
+                    return False
+                if not cls._tool_arg_value_matches(expected_value, actual[key]):
+                    return False
+            return True
+
+        if isinstance(expected, list):
+            if not isinstance(actual, list):
+                return False
+            return expected == actual
+
         return expected == actual
 
     def _get_turn_tool_response(

@@ -21,6 +21,8 @@ import click
 from dotenv import load_dotenv
 from loguru import logger
 
+from audio_arena.pipelines.base import BasePipeline
+
 # Load environment variables from .env file
 load_dotenv()
 
@@ -188,11 +190,11 @@ def turn_uses_oracle_post_tool_continuation(
     pipeline_type: str,
     turn: dict[str, Any],
 ) -> bool:
-    """Return True for rehydrated single-call realtime turns using the split flow."""
+    """Return True for rehydrated realtime turns with any scripted tool call."""
     required_call = turn.get("required_function_call")
     return (
         pipeline_type in {"realtime", "grok-realtime"}
-        and isinstance(required_call, dict)
+        and required_call is not None
     )
 
 
@@ -234,17 +236,24 @@ def merge_oracle_continuation_artifacts(
         )
 
     row = lines[0]
-    actual_tool_call = live_tool_capture.get("actual_tool_call")
-    actual_tool_result = live_tool_capture.get("actual_tool_result")
-    if actual_tool_call:
-        row["tool_calls"] = [actual_tool_call]
-    if actual_tool_result is not None:
-        row["tool_results"] = [
-            {
-                "name": actual_tool_call.get("name") if actual_tool_call else None,
-                "response": actual_tool_result,
-            }
-        ]
+    actual_tool_calls = live_tool_capture.get("actual_tool_calls")
+    actual_tool_results = live_tool_capture.get("actual_tool_results")
+    if actual_tool_calls is None:
+        actual_tool_call = live_tool_capture.get("actual_tool_call")
+        actual_tool_calls = [actual_tool_call] if actual_tool_call else []
+    if actual_tool_results is None:
+        actual_tool_result = live_tool_capture.get("actual_tool_result")
+        if actual_tool_result is not None:
+            actual_tool_results = [
+                {
+                    "name": actual_tool_calls[0].get("name") if actual_tool_calls else None,
+                    "response": actual_tool_result,
+                }
+            ]
+        else:
+            actual_tool_results = []
+    row["tool_calls"] = actual_tool_calls
+    row["tool_results"] = actual_tool_results
 
     row["oracle_continuation"] = {
         "used": True,
@@ -272,11 +281,93 @@ def build_missing_tool_capture(turn: dict[str, Any]) -> dict[str, Any]:
         else [response] if response is not None else []
     )
     return {
+        "actual_tool_calls": [],
+        "actual_tool_results": [],
         "actual_tool_call": None,
         "actual_tool_result": None,
         "tool_name_correct": False,
         "tool_args_correct": False if required_call else None,
         "tool_use_pass": False,
+        "oracle_tool_calls": oracle_calls,
+        "oracle_tool_results": oracle_results,
+    }
+
+
+def _load_single_transcript_row(transcript_path: Path) -> dict[str, Any]:
+    """Load exactly one transcript row from a per-turn transcript artifact."""
+    lines = [
+        json.loads(line)
+        for line in transcript_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    if len(lines) != 1:
+        raise RuntimeError(
+            f"Expected exactly 1 transcript row in {transcript_path}, got {len(lines)}"
+        )
+    return lines[0]
+
+
+def build_live_tool_capture_from_transcript(
+    *,
+    turn: dict[str, Any],
+    transcript_path: Path,
+) -> dict[str, Any]:
+    """Build tool-capture metadata from a completed live capture transcript row."""
+    row = _load_single_transcript_row(transcript_path)
+    actual_tool_calls = list(row.get("tool_calls", []) or [])
+    actual_tool_results = list(row.get("tool_results", []) or [])
+    required_call = turn.get("required_function_call")
+    oracle_calls = (
+        required_call
+        if isinstance(required_call, list)
+        else [required_call] if required_call else []
+    )
+    response = turn.get("function_call_response")
+    oracle_results = (
+        response
+        if isinstance(response, list)
+        else [response] if response is not None else []
+    )
+
+    if not actual_tool_calls:
+        return build_missing_tool_capture(turn)
+
+    remaining_actual_indices = set(range(len(actual_tool_calls)))
+    matched_expected = 0
+    for expected_call in oracle_calls:
+        for actual_index, actual_call in enumerate(actual_tool_calls):
+            if actual_index not in remaining_actual_indices:
+                continue
+            if actual_call.get("name") != expected_call.get("name"):
+                continue
+            if not BasePipeline._tool_args_match(
+                expected_call.get("args", {}),
+                actual_call.get("args", {}),
+            ):
+                continue
+            remaining_actual_indices.remove(actual_index)
+            matched_expected += 1
+            break
+
+    matching_name_calls = [
+        actual_call
+        for actual_call in actual_tool_calls
+        if any(actual_call.get("name") == oracle_call.get("name") for oracle_call in oracle_calls)
+    ]
+
+    tool_name_correct = len(matching_name_calls) == len(actual_tool_calls)
+    tool_args_correct = matched_expected == len(oracle_calls)
+    return {
+        "actual_tool_calls": actual_tool_calls,
+        "actual_tool_results": actual_tool_results,
+        "actual_tool_call": actual_tool_calls[0] if actual_tool_calls else None,
+        "actual_tool_result": (
+            actual_tool_results[0].get("response")
+            if actual_tool_results else None
+        ),
+        "tool_name_correct": tool_name_correct,
+        "tool_args_correct": tool_args_correct,
+        "tool_use_pass": bool(tool_name_correct and tool_args_correct),
         "oracle_tool_calls": oracle_calls,
         "oracle_tool_results": oracle_results,
     }
@@ -951,15 +1042,24 @@ async def _run_rehydrated(
                                 disable_vad=disable_vad,
                                 juice=juice,
                                 verbosity=verbosity,
-                                stop_after_first_tool_call=True,
+                                stop_after_first_tool_call=isinstance(
+                                    target_turn.get("required_function_call"),
+                                    dict,
+                                ),
                             )
                         finally:
                             capture_recorder.close()
 
-                        live_tool_capture = (
-                            capture_pipeline.get_captured_tool_phase()
-                            or build_missing_tool_capture(target_turn)
-                        )
+                        if isinstance(target_turn.get("required_function_call"), dict):
+                            live_tool_capture = (
+                                capture_pipeline.get_captured_tool_phase()
+                                or build_missing_tool_capture(target_turn)
+                            )
+                        else:
+                            live_tool_capture = build_live_tool_capture_from_transcript(
+                                turn=target_turn,
+                                transcript_path=capture_run_dir / "transcript.jsonl",
+                            )
 
                         continuation_benchmark = BenchmarkConfig()
                         if real_audio_speaker:
