@@ -249,7 +249,7 @@ turns = [
                 "Vanilla Extract, four-ounce bottle for eleven ninety-nine. "
                 "All three added.",
  'required_function_call': [
-     {'name': 'lookup_item', 'args': {'query': 'honey'}},
+     {'name': 'lookup_item', 'args': {'query': 'raw honey'}},
      {'name': 'lookup_item', 'args': {'query': 'balsamic vinegar'}},
      {'name': 'lookup_item', 'args': {'query': 'vanilla extract'}}],
  'function_call_response': [

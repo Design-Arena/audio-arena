@@ -7,6 +7,7 @@ import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
+from pipecat.frames.frames import FunctionCallResultProperties
 from pipecat.services.openai.realtime import events as rt_events
 
 from audio_arena.judging.llm_judge import (
@@ -1124,8 +1125,8 @@ class JudgeAndRehydrationRegressionTests(unittest.TestCase):
 
         self.assertIn("Oracle Continuation", formatted)
         self.assertIn("Oracle Seeded Tool Results", formatted)
-        self.assertIn("Actual Functions", formatted)
-        self.assertIn("Live Tool Capture Results (tool_use_correct only)", formatted)
+        self.assertNotIn("Actual Functions", formatted)
+        self.assertNotIn("Live Tool Capture Results (tool_use_correct only)", formatted)
         self.assertIn(
             "source of truth for the assistant response",
             formatted,
@@ -1313,6 +1314,60 @@ class JudgeAndRehydrationRegressionTests(unittest.TestCase):
         self.assertEqual(sanitized["audio"]["length"], 500)
         self.assertTrue(sanitized["audio"]["__truncated__"])
         self.assertEqual(sanitized["nested"]["delta"]["length"], 400)
+
+    def test_ws_event_sanitizer_handles_function_call_result_properties(self):
+        payload = {
+            "type": "tool_result",
+            "properties": FunctionCallResultProperties(run_llm=False),
+        }
+
+        sanitized = OpenAIRealtimeLLMServiceExplicitToolResult._sanitize_ws_event_payload(
+            payload
+        )
+
+        self.assertEqual(sanitized["type"], "tool_result")
+        self.assertEqual(
+            sanitized["properties"]["run_llm"],
+            False,
+        )
+
+    def test_function_call_output_serializes_non_json_native_tool_result_fields(self):
+        service = OpenAIRealtimeLLMServiceExplicitToolResult.__new__(
+            OpenAIRealtimeLLMServiceExplicitToolResult
+        )
+        service._context = object()
+        service._pending_function_calls = {"call_1": SimpleNamespace(name="get_quote")}
+        service._completed_tool_calls = set()
+        service._get_last_tool_result = lambda: {
+            "status": "success",
+            "properties": FunctionCallResultProperties(run_llm=False),
+        }
+        service._pending_response_create = False
+        service._waiting_for_response_done_before_response_create = False
+        service._pending_tool_output_item_ids = set()
+        service.run_function_calls = AsyncMock()
+
+        captured_outputs = []
+
+        async def fake_send_client_event(event):
+            if isinstance(event, rt_events.ConversationItemCreateEvent):
+                captured_outputs.append(json.loads(event.item.output))
+
+        service.send_client_event = fake_send_client_event
+
+        evt = SimpleNamespace(
+            call_id="call_1",
+            arguments=json.dumps({"event_type": "wedding"}),
+        )
+
+        asyncio.run(service._handle_evt_function_call_arguments_done(evt))
+
+        self.assertEqual(len(captured_outputs), 1)
+        self.assertEqual(captured_outputs[0]["status"], "success")
+        self.assertEqual(
+            captured_outputs[0]["properties"]["run_llm"],
+            False,
+        )
 
 
 if __name__ == "__main__":

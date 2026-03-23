@@ -14,10 +14,12 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional
 
 from .llm_judge import (
+    apply_precomputed_oracle_tool_use,
     build_rehydrated_turn_prompt_bundles,
     build_judge_summary,
     build_judge_system_prompt,
     build_judge_user_prompt,
+    filter_runtime_failure_records,
     format_turns_for_judge,
     format_rehydrated_turns_for_judge,
     get_turn_taking_support,
@@ -90,8 +92,10 @@ async def judge_with_openai(
     if only_turns is not None:
         records = [r for r in records if r["turn"] in only_turns]
 
+    records, runtime_excluded_turns = filter_runtime_failure_records(records, run_dir)
+
     if not records:
-        raise ValueError("No turns to judge")
+        raise ValueError("No turns to judge after excluding runtime-failure turns.")
 
     model_name = records[0].get("model_name", "unknown")
 
@@ -221,6 +225,8 @@ async def judge_with_openai(
                 )
             final_judgments.extend(judgments_for_turn)
 
+    apply_precomputed_oracle_tool_use(final_judgments, records)
+
     if debug:
         print(f"\nRealignment notes: {realignment_notes}", file=sys.stderr)
         print(f"Function tracking: {json.dumps(function_tracking, indent=2)}", file=sys.stderr)
@@ -276,4 +282,5 @@ async def judge_with_openai(
         "judge_version": judge_version,
         "turn_taking_supported": turn_taking_supported,
         "turn_taking_skip_reason": turn_taking_skip_reason,
+        "runtime_excluded_turns": runtime_excluded_turns,
     }

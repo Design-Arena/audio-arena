@@ -12,6 +12,7 @@ import asyncio
 import json
 import time
 import uuid
+from dataclasses import asdict, is_dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -168,6 +169,23 @@ class OpenAIRealtimeLLMServiceExplicitToolResult(ReconnectOnDisconnectMixin, Ope
     @staticmethod
     def _sanitize_ws_event_payload(payload):
         """Keep the event stream readable by truncating large audio/base64 fields."""
+        if payload is None or isinstance(payload, (str, int, float, bool)):
+            return payload
+        if isinstance(payload, Path):
+            return str(payload)
+        if hasattr(payload, "model_dump"):
+            try:
+                return OpenAIRealtimeLLMServiceExplicitToolResult._sanitize_ws_event_payload(
+                    payload.model_dump(exclude_none=True)
+                )
+            except TypeError:
+                return OpenAIRealtimeLLMServiceExplicitToolResult._sanitize_ws_event_payload(
+                    payload.model_dump()
+                )
+        if is_dataclass(payload):
+            return OpenAIRealtimeLLMServiceExplicitToolResult._sanitize_ws_event_payload(
+                asdict(payload)
+            )
         if isinstance(payload, dict):
             sanitized = {}
             for key, value in payload.items():
@@ -186,12 +204,25 @@ class OpenAIRealtimeLLMServiceExplicitToolResult(ReconnectOnDisconnectMixin, Ope
                     value
                 )
             return sanitized
-        if isinstance(payload, list):
+        if isinstance(payload, (list, tuple, set)):
             return [
                 OpenAIRealtimeLLMServiceExplicitToolResult._sanitize_ws_event_payload(item)
                 for item in payload
             ]
-        return payload
+        if hasattr(payload, "__dict__"):
+            try:
+                return {
+                    "__type__": type(payload).__name__,
+                    "fields": OpenAIRealtimeLLMServiceExplicitToolResult._sanitize_ws_event_payload(
+                        vars(payload)
+                    ),
+                }
+            except TypeError:
+                pass
+        return {
+            "__type__": type(payload).__name__,
+            "repr": repr(payload),
+        }
 
     def _record_ws_event(self, *, direction: str, payload, raw_text: Optional[str] = None) -> None:
         if self._websocket_event_log_path is None:
@@ -445,7 +476,10 @@ class OpenAIRealtimeLLMServiceExplicitToolResult(ReconnectOnDisconnectMixin, Ope
                     await maybe_awaitable
             return
 
-        output_json = json.dumps(tool_result)
+        output_json = json.dumps(
+            self._sanitize_ws_event_payload(tool_result),
+            ensure_ascii=False,
+        )
         tool_output_item_id = uuid.uuid4().hex
         self._pending_tool_output_item_ids.add(tool_output_item_id)
         create_ev = rt_events.ConversationItemCreateEvent(

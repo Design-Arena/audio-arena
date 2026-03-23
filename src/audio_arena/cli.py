@@ -1347,6 +1347,7 @@ def judge(
             realignment_applied=result.get("cross_turn_realignment_applied"),
             turn_taking_supported=result.get("turn_taking_supported"),
             turn_taking_skip_reason=result.get("turn_taking_skip_reason"),
+            runtime_excluded_turns=result.get("runtime_excluded_turns"),
         )
         summary_file = "openai_summary.json"
 
@@ -1384,6 +1385,7 @@ def judge(
             realignment_applied=result.get("cross_turn_realignment_applied"),
             turn_taking_supported=result.get("turn_taking_supported"),
             turn_taking_skip_reason=result.get("turn_taking_skip_reason"),
+            runtime_excluded_turns=result.get("runtime_excluded_turns"),
         )
         summary_file = "claude_summary.json"
 

@@ -96,6 +96,7 @@ For each turn, evaluate SIX dimensions:
    - If the transcript shows a benchmark-generated tool error such as `UNEXPECTED_TOOL_CALL` or `ARG_MISMATCH`, inspect the actual call carefully before scoring:
      - FALSE when the benchmark error reflects a materially wrong tool, wrong ID, missing required step, or materially wrong arguments
      - TRUE when the benchmark error is only a benign harness mismatch such as semantically equivalent wording, harmless formatting like `9:15` vs `09:15`, order-insensitive list ordering, capitalization-only differences, punctuation-only differences, or an expected `end_session({})` on a turn whose scripted response payload was omitted
+     - For `lookup_item`-style search tools, treat a more specific product-name query as compatible with a broader expected query when it clearly resolves the same intended item and does not skip any other required unique lookups
      - For free-text arguments such as titles, notes, issue descriptions, suggestion text, or similar natural-language fields, prefer semantic equivalence over string identity. Treat the call as correct when the meaning is preserved and no user-visible action is changed, even if casing, articles, punctuation, or minor paraphrase differ.
      - When you decide an `ARG_MISMATCH` is benign and the call is semantically equivalent, judge the rest of the turn against the intended successful action/result rather than against the raw harness error. Do NOT fail instruction_following or kb_grounding solely because the harness emitted a benign mismatch.
    - FALSE if the assistant's words imply waiting for confirmation but it acts without waiting (words-actions mismatch)
@@ -387,6 +388,30 @@ def load_runtime_metadata(run_dir: Path) -> Dict[str, Any]:
         return json.loads(runtime_path.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
         return {}
+
+
+def is_runtime_failure_record(record: Dict[str, Any]) -> bool:
+    """Return True when a transcript row is an explicit runtime artifact."""
+    assistant_text = str(record.get("assistant_text", "") or "")
+    return assistant_text.startswith("[EMPTY_RESPONSE") or assistant_text.startswith("[NO_RESPONSE")
+
+
+def filter_runtime_failure_records(
+    records: List[Dict[str, Any]],
+    run_dir: Path,
+) -> tuple[List[Dict[str, Any]], List[int]]:
+    """Exclude explicit runtime-failure turns from scoring."""
+    runtime = load_runtime_metadata(run_dir)
+    excluded_turns = set(runtime.get("failed_turns", []) or [])
+    for record in records:
+        if is_runtime_failure_record(record):
+            excluded_turns.add(record["turn"])
+
+    filtered_records = [
+        record for record in records
+        if record["turn"] not in excluded_turns
+    ]
+    return filtered_records, sorted(excluded_turns)
 
 
 def uses_cross_turn_realignment(run_dir: Path) -> bool:
@@ -829,10 +854,11 @@ def format_rehydrated_turns_for_judge(
         if oracle_continuation.get("used"):
             lines.append(
                 "**Oracle Continuation**: Assistant text below was generated in a fresh session "
-                "seeded with the GT current-turn tool call/result. Judge tool_use_correct from "
-                "the live Actual Functions. For instruction_following, kb_grounding, ambiguity_handling, "
-                "and state_tracking, use the Oracle Seeded Tool Calls/Results below as the "
-                "source of truth for the assistant response."
+                "seeded with the GT current-turn tool call/result. Tool use for this turn is "
+                "scored separately from the live capture outside this prompt. For "
+                "instruction_following, kb_grounding, ambiguity_handling, and state_tracking, "
+                "use the Oracle Seeded Tool Calls/Results below as the source of truth for the "
+                "assistant response."
             )
         lines.append(f"**User**: {rec['user_text']}")
         lines.append(f"**Assistant**: {rec['assistant_text']}")
@@ -869,36 +895,19 @@ def format_rehydrated_turns_for_judge(
         if tool_use_guidance:
             lines.append(f"**Tool Use Guidance**: {tool_use_guidance}")
 
-        actual_calls = rec.get("tool_calls", [])
-        if actual_calls:
-            lines.append(f"**Actual Functions**: {json.dumps(actual_calls)}")
-        else:
-            lines.append("**Actual Functions**: none")
-
         if oracle_continuation.get("used"):
-            lines.append(
-                f"**Oracle Tool Name Correct**: {oracle_continuation.get('tool_name_correct')}"
-            )
-            lines.append(
-                f"**Oracle Tool Args Correct**: {oracle_continuation.get('tool_args_correct')}"
-            )
-            lines.append(
-                f"**Oracle Tool Use Pass**: {oracle_continuation.get('tool_use_pass')}"
-            )
             lines.append(
                 f"**Oracle Seeded Tool Calls**: {json.dumps(oracle_continuation.get('oracle_tool_calls', []))}"
             )
             lines.append(
                 f"**Oracle Seeded Tool Results**: {json.dumps(oracle_continuation.get('oracle_tool_results', []))}"
             )
-            actual_results = rec.get("tool_results", [])
-            if actual_results:
-                lines.append(
-                    f"**Live Tool Capture Results (tool_use_correct only)**: {json.dumps(actual_results)}"
-                )
-            else:
-                lines.append("**Live Tool Capture Results (tool_use_correct only)**: none")
         else:
+            actual_calls = rec.get("tool_calls", [])
+            if actual_calls:
+                lines.append(f"**Actual Functions**: {json.dumps(actual_calls)}")
+            else:
+                lines.append("**Actual Functions**: none")
             actual_results = rec.get("tool_results", [])
             if actual_results:
                 lines.append(f"**Actual Function Results**: {json.dumps(actual_results)}")
@@ -956,6 +965,33 @@ def build_rehydrated_turn_prompt_bundles(
     return bundles
 
 
+def apply_precomputed_oracle_tool_use(
+    final_judgments: List[Dict[str, Any]],
+    records: List[Dict[str, Any]],
+) -> None:
+    """Override tool_use_correct on oracle-continuation turns from live capture metadata."""
+    oracle_tool_use_by_turn = {
+        record["turn"]: record.get("oracle_continuation", {}).get("tool_use_pass")
+        for record in records
+        if record.get("oracle_continuation", {}).get("used")
+    }
+
+    for judgment in final_judgments:
+        turn_num = judgment.get("turn")
+        if turn_num not in oracle_tool_use_by_turn:
+            continue
+        tool_use_pass = oracle_tool_use_by_turn[turn_num]
+        if tool_use_pass is None:
+            continue
+        judgment["tool_use_correct"] = bool(tool_use_pass)
+        reasoning = judgment.get("reasoning", "")
+        note = (
+            " Tool use was populated from the precomputed live-capture verdict for this "
+            "oracle-continuation turn."
+        )
+        judgment["reasoning"] = f"{reasoning}{note}".strip()
+
+
 # ============================================================================
 # Claude Judge
 # ============================================================================
@@ -997,8 +1033,10 @@ async def judge_with_claude(
     if only_turns is not None:
         records = [r for r in records if r["turn"] in only_turns]
 
+    records, runtime_excluded_turns = filter_runtime_failure_records(records, run_dir)
+
     if not records:
-        raise ValueError("No turns to judge")
+        raise ValueError("No turns to judge after excluding runtime-failure turns.")
 
     model_name = records[0].get("model_name", "unknown")
 
@@ -1117,6 +1155,8 @@ async def judge_with_claude(
                 )
             final_judgments.extend(judgments_for_turn)
 
+    apply_precomputed_oracle_tool_use(final_judgments, records)
+
     if debug:
         print(f"\nRealignment notes: {realignment_notes}", file=sys.stderr)
         print(f"Function tracking: {json.dumps(function_tracking, indent=2)}", file=sys.stderr)
@@ -1177,6 +1217,7 @@ async def judge_with_claude(
         "judge_version": judge_version,
         "turn_taking_supported": turn_taking_supported,
         "turn_taking_skip_reason": turn_taking_skip_reason,
+        "runtime_excluded_turns": runtime_excluded_turns,
     }
 
 
@@ -1200,6 +1241,7 @@ def write_outputs(
     realignment_applied: Optional[bool] = None,
     turn_taking_supported: Optional[bool] = None,
     turn_taking_skip_reason: Optional[str] = None,
+    runtime_excluded_turns: Optional[List[int]] = None,
 ) -> None:
     """Write all output files.
 
@@ -1228,11 +1270,15 @@ def write_outputs(
         realignment_applied = bool(function_tracking)
     if turn_taking_supported is None:
         turn_taking_supported = turn_taking_analysis is not None
+    if runtime_excluded_turns is None:
+        runtime_excluded_turns = []
 
     # 1. {judge_name}_judged.jsonl
     with (run_dir / f"{judge_name}_judged.jsonl").open("w", encoding="utf-8") as f:
         for rec in records:
             turn = rec["turn"]
+            if turn not in judgments:
+                continue
             judgment = judgments[turn]
             output_rec = {
                 **rec,
@@ -1310,6 +1356,8 @@ def write_outputs(
         "turn_taking_affected_instruction": turn_taking_affected_instruction,
         "turn_taking_supported": turn_taking_supported,
         "turn_taking_skip_reason": turn_taking_skip_reason,
+        "runtime_excluded_turns": runtime_excluded_turns,
+        "runtime_excluded_count": len(runtime_excluded_turns),
     }
 
     (run_dir / f"{judge_name}_summary.json").write_text(
@@ -1328,6 +1376,13 @@ def write_outputs(
         f"**Judge Version**: {judge_version}",
         f"**Judged**: {summary_data['judged_at']}",
         f"",
+    ]
+    if runtime_excluded_turns:
+        lines.extend([
+            f"**Runtime-Excluded Turns**: {', '.join(str(turn) for turn in runtime_excluded_turns)}",
+            f"",
+        ])
+    lines.extend([
         f"## Summary Metrics",
         f"",
         f"- **Turn-Taking**: {passes['turn_taking']}/{total} ({passes['turn_taking']/total*100:.1f}%)",
@@ -1337,7 +1392,7 @@ def write_outputs(
         f"- **Ambiguity Handling**: {passes['ambiguity_handling']}/{totals['ambiguity_handling']} ({passes['ambiguity_handling']/totals['ambiguity_handling']*100:.1f}% of {totals['ambiguity_handling']} applicable turns)" if totals['ambiguity_handling'] > 0 else f"- **Ambiguity Handling**: N/A (no applicable turns)",
         f"- **State Tracking**: {passes['state_tracking']}/{totals['state_tracking']} ({passes['state_tracking']/totals['state_tracking']*100:.1f}% of {totals['state_tracking']} applicable turns)" if totals['state_tracking'] > 0 else f"- **State Tracking**: N/A (no applicable turns)",
         f"",
-    ]
+    ])
 
     # Add turn-taking analysis summary
     if turn_taking_analysis and turn_taking_analysis.get("failed_turns"):

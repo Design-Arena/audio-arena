@@ -51,8 +51,7 @@ turns = [
 # Turn 2 — Cross-reference two doctors' schedules from KB
 {'input': "Yeah, what's the soonest day they're both in?",
  'golden_text': "The only day both Dr. Perry and Dr. Barry are in the office "
-                "is Monday. The next Monday would be January 13th. Would "
-                "that work?",
+                "is Monday. Would that work for both appointments?",
  'required_function_call': None,
  'categories': ['basic_qa', 'long_range_memory'],
  'audio_file': 'audio/turn_002.wav'},
