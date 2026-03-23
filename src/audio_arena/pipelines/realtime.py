@@ -1297,6 +1297,10 @@ class RealtimePipeline(BasePipeline):
             processor, user_audio: bytes, bot_audio: bytes, sample_rate: int, num_channels: int
         ):
             """Save conversation audio with user and bot on separate channels."""
+            if os.environ.get("SKIP_AUDIO_RECORDING"):
+                logger.info("[AudioRecording] Skipping audio save (SKIP_AUDIO_RECORDING set)")
+                return
+
             logger.info(
                 f"[AudioRecording] on_track_audio_data triggered: "
                 f"user={len(user_audio)} bytes, bot={len(bot_audio)} bytes, "

@@ -10,7 +10,7 @@ class BenchmarkConfig:
     """Configuration for the product comparison benchmark."""
 
     name = "product_bench"
-    description = "31-turn laptop comparison benchmark: multi-intent turns, retroactive correction via reported speech, vague pronoun resolution, conditional arithmetic chains, discount stacking policy edge, 3 subtle + 2 direct false memory traps, cross-reference counting, 3-step order modification chain, out-of-scope deflection"
+    description = "31-turn laptop comparison benchmark: multi-intent turns, retroactive correction via reported speech, vague pronoun resolution, conditional arithmetic chains, discount stacking policy edge, 3 subtle + 1 direct false memory traps, cross-reference counting, 3-step order modification chain, out-of-scope deflection"
     hf_repo = "arcada-labs/product-bench"
 
     turns = turns

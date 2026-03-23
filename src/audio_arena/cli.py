@@ -50,11 +50,15 @@ SERVICE_ALIASES = {
 # ============================================================================
 
 MODEL_ALIASES: dict[str, tuple[str, Optional[str], Optional[str]]] = {
-    "gpt-realtime":      ("gpt-realtime",                     "openai-realtime",   None),
-    "gemini-native-audio": ("gemini-2.5-flash-native-audio-preview-12-2025", "gemini-live", None),
-    "ultravox":          ("ultravox-v0.7",                     "ultravox-realtime", None),
-    "grok-realtime":     ("grok-realtime",                     None,               None),
-    "nova-sonic":        ("amazon.nova-2-sonic-v1:0",          None,               "nova-sonic"),
+    "gpt-realtime": ("gpt-realtime", "openai-realtime", None),
+    "gemini-native-audio": (
+        "gemini-2.5-flash-native-audio-preview-12-2025",
+        "gemini-live",
+        None,
+    ),
+    "ultravox": ("ultravox-v0.7", "ultravox-realtime", None),
+    "grok-realtime": ("grok-realtime", None, None),
+    "nova-sonic": ("amazon.nova-2-sonic-v1:0", None, "nova-sonic"),
 }
 
 
@@ -192,10 +196,7 @@ def turn_uses_oracle_post_tool_continuation(
 ) -> bool:
     """Return True for rehydrated realtime turns with any scripted tool call."""
     required_call = turn.get("required_function_call")
-    return (
-        pipeline_type in {"realtime", "grok-realtime"}
-        and required_call is not None
-    )
+    return pipeline_type in {"realtime", "grok-realtime"} and required_call is not None
 
 
 def build_oracle_continuation_history(
@@ -246,7 +247,9 @@ def merge_oracle_continuation_artifacts(
         if actual_tool_result is not None:
             actual_tool_results = [
                 {
-                    "name": actual_tool_calls[0].get("name") if actual_tool_calls else None,
+                    "name": (
+                        actual_tool_calls[0].get("name") if actual_tool_calls else None
+                    ),
                     "response": actual_tool_result,
                 }
             ]
@@ -273,7 +276,11 @@ def merge_oracle_continuation_artifacts(
 def build_missing_tool_capture(turn: dict[str, Any]) -> dict[str, Any]:
     """Return a failed live tool-use verdict when no tool call was captured."""
     required_call = turn.get("required_function_call")
-    oracle_calls = required_call if isinstance(required_call, list) else [required_call] if required_call else []
+    oracle_calls = (
+        required_call
+        if isinstance(required_call, list)
+        else [required_call] if required_call else []
+    )
     response = turn.get("function_call_response")
     oracle_results = (
         response
@@ -352,7 +359,10 @@ def build_live_tool_capture_from_transcript(
     matching_name_calls = [
         actual_call
         for actual_call in actual_tool_calls
-        if any(actual_call.get("name") == oracle_call.get("name") for oracle_call in oracle_calls)
+        if any(
+            actual_call.get("name") == oracle_call.get("name")
+            for oracle_call in oracle_calls
+        )
     ]
 
     tool_name_correct = len(matching_name_calls) == len(actual_tool_calls)
@@ -362,8 +372,7 @@ def build_live_tool_capture_from_transcript(
         "actual_tool_results": actual_tool_results,
         "actual_tool_call": actual_tool_calls[0] if actual_tool_calls else None,
         "actual_tool_result": (
-            actual_tool_results[0].get("response")
-            if actual_tool_results else None
+            actual_tool_results[0].get("response") if actual_tool_results else None
         ),
         "tool_name_correct": tool_name_correct,
         "tool_args_correct": tool_args_correct,
@@ -432,21 +441,26 @@ def create_run_directory(benchmark_name: str, model: str) -> Path:
     return run_dir
 
 
+_logging_initialized = False
+
+
 def setup_logging(run_dir: Path, verbose: bool = False):
-    """Configure logging to both console and run directory."""
-    level = logging.DEBUG if verbose else logging.INFO
+    """Configure logging to both console and run directory.
 
-    # Remove default loguru handler
-    logger.remove()
+    The global logger.remove() + console handler setup only runs once so that
+    parallel callers (e.g. run_all_benchmarks.py) don't destroy each other's
+    per-turn sinks.  Each call still adds its own per-run file sink.
+    """
+    global _logging_initialized
+    if not _logging_initialized:
+        logger.remove()
+        logger.add(
+            sys.stderr,
+            level="INFO" if not verbose else "DEBUG",
+            format="<level>{message}</level>",
+        )
+        _logging_initialized = True
 
-    # Console handler
-    logger.add(
-        sys.stderr,
-        level="INFO" if not verbose else "DEBUG",
-        format="<level>{message}</level>",
-    )
-
-    # File handler (always DEBUG for debugging failed runs)
     logger.add(
         run_dir / "run.log",
         level="DEBUG",
@@ -461,7 +475,8 @@ def add_turn_logging_sink(turn_run_dir: Path) -> int:
         turn_run_dir / "run.log",
         level="DEBUG",
         format="{time:YYYY-MM-DD HH:mm:ss.SSS} {level} {name}: {message}",
-        filter=lambda record: record["extra"].get("rehydration_turn_dir") == turn_dir_str,
+        filter=lambda record: record["extra"].get("rehydration_turn_dir")
+        == turn_dir_str,
     )
 
 
@@ -500,7 +515,9 @@ def finalize_rehydrated_run_artifacts(
     for turn_index in sorted(target_indices):
         result = turn_results.get(turn_index)
         if result is None:
-            raise RuntimeError(f"Missing execution result metadata for rehydrated turn {turn_index}.")
+            raise RuntimeError(
+                f"Missing execution result metadata for rehydrated turn {turn_index}."
+            )
 
         turn_run_dir = Path(result["turn_run_dir"])
         transcript_path = turn_run_dir / "transcript.jsonl"
@@ -554,13 +571,13 @@ def finalize_rehydrated_run_artifacts(
     merged_records.sort(key=lambda record: record["turn"])
     transcript_path = run_dir / "transcript.jsonl"
     transcript_path.write_text(
-        "".join(json.dumps(record, ensure_ascii=False) + "\n" for record in merged_records),
+        "".join(
+            json.dumps(record, ensure_ascii=False) + "\n" for record in merged_records
+        ),
         encoding="utf-8",
     )
 
-    turn_taking_skip_reason = (
-        "Per-turn rehydrated runs keep audio isolated in turn_runs/; parent conversation.wav is intentionally omitted."
-    )
+    turn_taking_skip_reason = "Per-turn rehydrated runs keep audio isolated in turn_runs/; parent conversation.wav is intentionally omitted."
     runtime = {
         "model_name": model,
         "turns": len(merged_records),
@@ -569,7 +586,9 @@ def finalize_rehydrated_run_artifacts(
         "mode": "rehydrated",
         "parallel": parallel,
         "disable_vad": disable_vad,
-        "audio_source": f"real_audio/{real_audio_speaker}" if real_audio_speaker else "tts",
+        "audio_source": (
+            f"real_audio/{real_audio_speaker}" if real_audio_speaker else "tts"
+        ),
         "turn_artifact_layout": "per_turn_subdirs",
         "turn_taking_supported": False,
         "turn_taking_skip_reason": turn_taking_skip_reason,
@@ -608,7 +627,9 @@ def cli():
 
 @cli.command()
 @click.argument("benchmark_name")
-@click.option("--model", required=True, help="Model name (e.g., gpt-4o, claude-sonnet-4-5)")
+@click.option(
+    "--model", required=True, help="Model name (e.g., gpt-4o, claude-sonnet-4-5)"
+)
 @click.option("--service", help="Service class name or alias (e.g., openai, anthropic)")
 @click.option(
     "--pipeline",
@@ -650,6 +671,11 @@ def cli():
     help='Use real (human-recorded) audio. Pass a speaker name (e.g., "person1") or "all" to run every speaker.',
 )
 @click.option("--verbose", "-v", is_flag=True, help="Enable verbose logging")
+@click.option(
+    "--skip-audio",
+    is_flag=True,
+    help="Skip saving conversation.wav audio recording (saves disk space).",
+)
 def run(
     benchmark_name: str,
     model: str,
@@ -663,6 +689,7 @@ def run(
     verbosity: Optional[int],
     real_audio_speaker: Optional[str],
     verbose: bool,
+    skip_audio: bool,
 ):
     """Run a benchmark against an LLM.
 
@@ -679,10 +706,22 @@ def run(
     """
     model, service, pipeline = resolve_model_alias(model, service, pipeline)
 
+    if skip_audio:
+        os.environ["SKIP_AUDIO_RECORDING"] = "1"
+
     if real_audio_speaker and real_audio_speaker.lower() == "all":
         _run_all_speakers(
-            benchmark_name, model, service, pipeline, only_turns,
-            rehydrate, parallel, disable_vad, juice, verbosity, verbose,
+            benchmark_name,
+            model,
+            service,
+            pipeline,
+            only_turns,
+            rehydrate,
+            parallel,
+            disable_vad,
+            juice,
+            verbosity,
+            verbose,
         )
         return
 
@@ -754,18 +793,31 @@ def _run_all_speakers(
         if rehydrate:
             asyncio.run(
                 _run_rehydrated(
-                    benchmark_name, model, service, pipeline, only_turns,
-                    verbose, parallel, disable_vad=disable_vad,
-                    juice=juice, verbosity=verbosity,
+                    benchmark_name,
+                    model,
+                    service,
+                    pipeline,
+                    only_turns,
+                    verbose,
+                    parallel,
+                    disable_vad=disable_vad,
+                    juice=juice,
+                    verbosity=verbosity,
                     real_audio_speaker=speaker,
                 )
             )
         else:
             asyncio.run(
                 _run(
-                    benchmark_name, model, service, pipeline, only_turns,
-                    verbose, disable_vad=disable_vad,
-                    juice=juice, verbosity=verbosity,
+                    benchmark_name,
+                    model,
+                    service,
+                    pipeline,
+                    only_turns,
+                    verbose,
+                    disable_vad=disable_vad,
+                    juice=juice,
+                    verbosity=verbosity,
                     real_audio_speaker=speaker,
                 )
             )
@@ -793,6 +845,7 @@ def _download_real_audio(benchmark, speaker: Optional[str] = None):
 
     try:
         from huggingface_hub import snapshot_download
+
         snapshot_download(
             repo_id=hf_repo,
             repo_type="dataset",
@@ -915,7 +968,9 @@ async def _run(
             runtime = json.loads(runtime_path.read_text())
         else:
             runtime = {}
-        runtime["audio_source"] = f"real_audio/{real_audio_speaker}" if real_audio_speaker else "tts"
+        runtime["audio_source"] = (
+            f"real_audio/{real_audio_speaker}" if real_audio_speaker else "tts"
+        )
         runtime_path.write_text(json.dumps(runtime, indent=2), encoding="utf-8")
 
         click.echo(f"Completed benchmark run")
@@ -1004,11 +1059,17 @@ async def _run_rehydrated(
         async with semaphore:
             golden_history = all_turns[:target_idx] if target_idx > 0 else None
             target_turn = all_turns[target_idx]
-            turn_run_dir = build_rehydrated_turn_run_dir(run_dir, target_idx, turn_dir_width)
+            turn_run_dir = build_rehydrated_turn_run_dir(
+                run_dir, target_idx, turn_dir_width
+            )
             turn_run_dir.mkdir(parents=True, exist_ok=True)
             click.echo(
                 f"[Rehydration] Turn {target_idx}/{len(all_turns) - 1}"
-                + (f" (rehydrating {len(golden_history)} golden turns)" if golden_history else "")
+                + (
+                    f" (rehydrating {len(golden_history)} golden turns)"
+                    if golden_history
+                    else ""
+                )
                 + f" -> {turn_run_dir.relative_to(run_dir)}"
             )
 
@@ -1063,7 +1124,9 @@ async def _run_rehydrated(
 
                         continuation_benchmark = BenchmarkConfig()
                         if real_audio_speaker:
-                            _setup_real_audio(continuation_benchmark, real_audio_speaker)
+                            _setup_real_audio(
+                                continuation_benchmark, real_audio_speaker
+                            )
                         continuation_recorder = TranscriptRecorder(turn_run_dir, model)
                         continuation_pipeline = pipeline_cls(continuation_benchmark)
                         try:
@@ -1128,7 +1191,11 @@ async def _run_rehydrated(
                     "error": str(e),
                 }
             finally:
-                logger.remove(turn_sink_id)
+                recorder.close()
+                try:
+                    logger.remove(turn_sink_id)
+                except ValueError:
+                    pass
 
     semaphore = asyncio.Semaphore(max_parallel)
     tasks = [_run_single_turn(semaphore, idx) for idx in target_indices]
@@ -1146,27 +1213,36 @@ async def _run_rehydrated(
     succeeded = runtime["turns"]
     failed_turns = runtime["failed_turns"]
 
-    click.echo(f"\nCompleted rehydrated run: {succeeded}/{len(target_indices)} turns succeeded")
+    click.echo(
+        f"\nCompleted rehydrated run: {succeeded}/{len(target_indices)} turns succeeded"
+    )
     if failed_turns:
         click.echo(f"  Failed turns: {failed_turns}")
     click.echo(f"  Transcript: {run_dir / 'transcript.jsonl'}")
 
 
-NON_CONVO_BENCHMARKS = {"appointment_bench", "event_bench", "grocery_bench"}
-
-
 @cli.command()
 @click.argument("run_dir", type=click.Path(exists=True))
-@click.option("--only-turns", help="Comma-separated turn indices to judge (e.g., 0,1,2)")
+@click.option(
+    "--only-turns", help="Comma-separated turn indices to judge (e.g., 0,1,2)"
+)
 @click.option(
     "--judge",
     "judge_backend",
     type=click.Choice(["claude", "openai"], case_sensitive=False),
     default=None,
-    help="Judge backend to use. Defaults to 'openai' for non-convo benchmarks, 'claude' for conversation_bench.",
+    help="Judge backend to use. Defaults to 'claude' for all benchmarks.",
 )
-@click.option("--judge-model", default=None, help="Model for judging (default: claude-opus-4-5 or o3)")
-@click.option("--skip-turn-taking", is_flag=True, help="Skip audio turn-taking analysis (faster; all turns count as turn_taking=True)")
+@click.option(
+    "--judge-model",
+    default=None,
+    help="Model for judging (default: claude-opus-4-5 for Claude, gpt-5.2 for OpenAI)",
+)
+@click.option(
+    "--skip-turn-taking",
+    is_flag=True,
+    help="Skip audio turn-taking analysis (faster; all turns count as turn_taking=True)",
+)
 @click.option("--debug", is_flag=True, help="Enable debug logging")
 def judge(
     run_dir: str,
@@ -1188,12 +1264,8 @@ def judge(
     # Infer benchmark from path: runs/{benchmark}/{timestamp}_{model}/
     benchmark_name = run_path.parent.name
 
-    # Auto-select judge backend based on benchmark type
     if judge_backend is None:
-        if benchmark_name in NON_CONVO_BENCHMARKS:
-            judge_backend = "openai"
-        else:
-            judge_backend = "claude"
+        judge_backend = "claude"
     click.echo(f"Using {judge_backend} judge for {benchmark_name}")
 
     # Load transcript
@@ -1214,12 +1286,18 @@ def judge(
         BenchmarkConfig = load_benchmark(benchmark_name)
         benchmark = BenchmarkConfig()
         expected_turns = benchmark.turns
-        benchmark_turns_module = importlib.import_module(f"benchmarks.{benchmark_name}.turns")
-        get_relevant_dimensions_fn = getattr(benchmark_turns_module, 'get_relevant_dimensions', None)
+        benchmark_turns_module = importlib.import_module(
+            f"benchmarks.{benchmark_name}.turns"
+        )
+        get_relevant_dimensions_fn = getattr(
+            benchmark_turns_module, "get_relevant_dimensions", None
+        )
         kb_text = load_benchmark_kb_text(benchmark_name)
         prompt_visible_kb_text = load_prompt_visible_kb_text(benchmark_name)
     except Exception:
-        click.echo(f"Could not load benchmark '{benchmark_name}', using shared turns module")
+        click.echo(
+            f"Could not load benchmark '{benchmark_name}', using shared turns module"
+        )
         from benchmarks.conversation_bench.turns import turns as expected_turns
 
     # Load shared utilities
@@ -1230,7 +1308,10 @@ def judge(
         records = [r for r in records if r["turn"] in turn_indices_set]
 
     if judge_backend == "openai":
-        from audio_arena.judging.openai_judge import judge_with_openai, OPENAI_JUDGE_MODEL
+        from audio_arena.judging.openai_judge import (
+            judge_with_openai,
+            OPENAI_JUDGE_MODEL,
+        )
 
         effective_model = judge_model or OPENAI_JUDGE_MODEL
         try:
@@ -1321,14 +1402,18 @@ def judge(
         suffix = f": {turn_taking_skip_reason}" if turn_taking_skip_reason else ""
         click.echo(f"\nJudged {total} turns (without turn-taking analysis{suffix})")
     click.echo(f"  Tool use: {passes.get('tool_use_correct', 0)}/{total}")
-    click.echo(f"  Instruction following: {passes.get('instruction_following', 0)}/{total}")
+    click.echo(
+        f"  Instruction following: {passes.get('instruction_following', 0)}/{total}"
+    )
     click.echo(f"  KB grounding: {passes.get('kb_grounding', 0)}/{total}")
 
     category_totals = summary.get("category_totals", {})
     amb_total = category_totals.get("ambiguity_handling", 0)
     state_total = category_totals.get("state_tracking", 0)
     if amb_total:
-        click.echo(f"  Ambiguity handling: {passes.get('ambiguity_handling', 0)}/{amb_total}")
+        click.echo(
+            f"  Ambiguity handling: {passes.get('ambiguity_handling', 0)}/{amb_total}"
+        )
     if state_total:
         click.echo(f"  State tracking: {passes.get('state_tracking', 0)}/{state_total}")
 
@@ -1364,14 +1449,20 @@ def list_speakers_cmd(benchmark_name: str):
     speakers = benchmark.list_speakers()
     if not speakers:
         click.echo(f"No real audio speakers found for {benchmark_name}.")
-        click.echo(f"  Expected location: benchmarks/{benchmark_name}/real_audio/<speaker>/")
+        click.echo(
+            f"  Expected location: benchmarks/{benchmark_name}/real_audio/<speaker>/"
+        )
         return
     click.echo(f"Available speakers for {benchmark_name}:")
     total_turns = len(benchmark.turns)
     for name in speakers:
         speaker_dir = benchmark.real_audio_dir / name
         wav_count = len(list(speaker_dir.glob("*.wav")))
-        status = "complete" if wav_count >= total_turns else f"{wav_count}/{total_turns} turns"
+        status = (
+            "complete"
+            if wav_count >= total_turns
+            else f"{wav_count}/{total_turns} turns"
+        )
         click.echo(f"  {name}: {status}")
 
 

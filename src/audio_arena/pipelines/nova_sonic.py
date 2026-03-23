@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import os
 import time
 import wave
 from dataclasses import dataclass
@@ -171,7 +172,7 @@ class NovaSonicLLMServiceWithCompletionSignal(AWSNovaSonicLLMService):
     7. Supports proactive session rotation before the 8-minute hard timeout
     """
 
-    PROACTIVE_ROTATION_THRESHOLD_SECONDS = 360  # 6 min -- rotate well before the 8-min limit
+    PROACTIVE_ROTATION_THRESHOLD_SECONDS = 180  # 3 min -- large system prompts (e.g. conversation_bench 49K) fill context before 6 min
 
     def __init__(
         self,
@@ -1646,6 +1647,10 @@ class NovaSonicPipeline:
             processor, user_audio: bytes, bot_audio: bytes, sample_rate: int, num_channels: int
         ):
             """Save conversation audio with user and bot on separate channels."""
+            if os.environ.get("SKIP_AUDIO_RECORDING"):
+                logger.info("[NovaSonic AudioRecording] Skipping audio save (SKIP_AUDIO_RECORDING set)")
+                return
+
             logger.info(
                 f"[NovaSonic AudioRecording] on_track_audio_data triggered: "
                 f"user={len(user_audio)} bytes, bot={len(bot_audio)} bytes, "

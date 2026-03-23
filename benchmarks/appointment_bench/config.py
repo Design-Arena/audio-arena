@@ -10,7 +10,7 @@ class BenchmarkConfig:
     """Configuration for the appointment scheduling benchmark."""
 
     name = "appointment_bench"
-    description = "25-turn dual-appointment benchmark: two patients (Daniel/Danielle Nolan), two doctors (Perry/Barry), phone number swap+revert, 3 false memory traps, slot-taken error recovery, cross-entity state tracking"
+    description = "25-turn dual-appointment benchmark: two patients (Daniel/Danielle Nolan), two doctors (Perry/Barry), phone number swap+revert, 4 false memory traps, slot-taken error recovery, cross-entity state tracking"
     hf_repo = "arcada-labs/appointment-bench"
 
     turns = turns

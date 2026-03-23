@@ -49,7 +49,11 @@ class XAIRealtimeLLMService(ReconnectOnDisconnectMixin, OpenAIRealtimeLLMService
         on_reconnected: Optional[Callable[[], None]] = None,
         **kwargs,
     ):
+        # xAI's Voice Agent API doesn't accept ?model= query param (unlike OpenAI).
+        # The parent class appends it, so we save the raw base_url and restore after init.
+        raw_base_url = kwargs.get("base_url", "wss://api.x.ai/v1/realtime")
         super().__init__(**kwargs)
+        self.base_url = raw_base_url
         self._get_last_tool_result = get_last_tool_result
         self._init_reconnection_callbacks(on_reconnecting, on_reconnected)
         # Track if we're using manual turn handling (VAD disabled)

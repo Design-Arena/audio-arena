@@ -1,25 +1,39 @@
-# ConversationBench: Multi-Turn Speech-to-Speech Evaluation Benchmark
+# Audio Arena: Multi-Turn Speech-to-Speech Evaluation Framework
 
-ConversationBench is a benchmark for evaluating speech-to-speech voice AI models through spoken audio. It tests knowledge retrieval, tool use, error recovery, adversarial attacks, long-range memory, and numerical reasoning across 75 turns of a single continuous conversation.
+Audio Arena is a framework for evaluating speech-to-speech voice AI models through spoken audio. It includes 6 benchmarks spanning 221 total turns across different domains, testing knowledge retrieval, tool use, error recovery, adversarial attacks, long-range memory, state tracking, and numerical reasoning.
 
-ConversationBench is part of [Audio Arena](https://audioarena.ai), built by [Arcada Labs](https://arcada.dev).
+Built by [Arcada Labs](https://arcada.dev).
 
 - **Leaderboard & results**: [audioarena.ai/leaderboard](https://audioarena.ai/leaderboard)
-- **Dataset on Hugging Face**: [arcada-labs/conversation-bench](https://huggingface.co/datasets/arcada-labs/conversation-bench)
-- **Source code**: [github.com/Design-Arena/conversation-bench](https://github.com/Design-Arena/conversation-bench)
+- **Datasets on Hugging Face**: [arcada-labs](https://huggingface.co/arcada-labs)
+- **Source code**: [github.com/Design-Arena/audio-arena](https://github.com/Design-Arena/audio-arena)
 
 ## What makes this different from text benchmarks
 
-- **Audio input**: Each turn is a `.wav` file generated with TTS (OpenAI `tts-1`, `alloy` voice), not text. Models must process speech, not read.
-- **Continuous conversation**: All 75 turns form a single continuous conversation. Later turns reference earlier ones. The model must track registrations, cancellations, corrections, and prior answers across the full session.
-- **Tool use over speech**: The model has 9 functions it can call (register for sessions, cancel actions, check conflicts, etc.) and must decide when and how to call them based on spoken instructions.
-- **Adversarial and edge-case turns**: Prompt injection, sycophancy traps, false presuppositions, distractor injection, and implicit corrections — all delivered via voice.
+- **Audio input**: Each turn is a `.wav` file (TTS-generated or human-recorded), not text. Models must process speech, not read.
+- **Continuous conversation**: Turns form a single continuous conversation per benchmark. Later turns reference earlier ones. The model must track state, corrections, and prior answers across the full session.
+- **Tool use over speech**: Models have domain-specific functions they can call and must decide when and how to call them based on spoken instructions.
+- **Adversarial and edge-case turns**: Prompt injection, sycophancy traps, false presuppositions, false memory traps, distractor injection, and implicit corrections — all delivered via voice.
 
-## Benchmark scenario
+## Benchmarks
 
-The conversation simulates a voice assistant for the **AI Engineer World's Fair 2025** conference. The user ("Jennifer Smith") asks about sessions, registers for talks, submits suggestions, deals with errors, and tests the model's limits over 75 turns.
+| Benchmark | Turns | Scenario | HF Dataset |
+|-----------|-------|----------|------------|
+| `conversation_bench` | 75 | Conference assistant for AI Engineer World's Fair — session registration, schedule queries, 9 tool functions, ~946-line knowledge base | [arcada-labs/conversation-bench](https://huggingface.co/datasets/arcada-labs/conversation-bench) |
+| `appointment_bench` | 25 | Dental office appointment scheduling — two patients (Daniel/Danielle Nolan), two doctors, phone number swap+revert, 4 false memory traps, slot-taken error recovery | [arcada-labs/appointment-bench](https://huggingface.co/datasets/arcada-labs/appointment-bench) |
+| `assistant_bench` | 31 | Personal assistant — flight booking, email, calendar, reminders, dual requests in single turns, topic switching, late references, correction-chain recall | [arcada-labs/assistant-bench](https://huggingface.co/datasets/arcada-labs/assistant-bench) |
+| `event_bench` | 29 | Event planning — venue+catering+guest count changes, mid-sentence self-corrections, vague pronoun resolution, multi-request reversals, retroactive date changes | [arcada-labs/event-bench](https://huggingface.co/datasets/arcada-labs/event-bench) |
+| `grocery_bench` | 30 | Grocery ordering — chained corrections, homophone collisions, conditional additions/removals, order reconciliation, quantity math, swap operations | [arcada-labs/grocery-bench](https://huggingface.co/datasets/arcada-labs/grocery-bench) |
+| `product_bench` | 31 | Laptop comparison shopping — multi-intent turns, retroactive corrections, conditional arithmetic chains, discount stacking edge cases, 3-step order modification chains | [arcada-labs/product-bench](https://huggingface.co/datasets/arcada-labs/product-bench) |
 
-The model is grounded in a **946-line knowledge base** containing the full conference schedule, speaker bios, venue logistics, ticket pricing, and more. It also has access to **9 tool functions** for actions like registering for sessions, voting, and submitting dietary requests.
+Each benchmark is a self-contained Python package under `benchmarks/` with:
+- `config.py` — Benchmark configuration (turns, tools, system instruction, HF repo)
+- `turns.py` — Turn definitions with golden answers
+- `tools.py` — Tool/function schema definitions
+- `system.py` — System prompt with knowledge base
+- `data/knowledge_base.txt` — Knowledge base content
+- `audio/` — TTS audio, downloaded automatically from Hugging Face on first run (gitignored)
+- `real_audio/` — Human-recorded audio per speaker, downloaded from HF when `--real-audio` is used (gitignored)
 
 ## Quick Start
 
@@ -31,10 +45,10 @@ uv sync
 uv run audio-arena list-benchmarks
 
 # Run a benchmark (audio files download automatically from HF on first run)
-uv run audio-arena run conversation_bench --model claude-sonnet-4-5 --service anthropic
+uv run audio-arena run appointment_bench --model claude-sonnet-4-5 --service anthropic
 
 # Judge the results
-uv run audio-arena judge runs/conversation_bench/<timestamp>_claude-sonnet-4-5
+uv run audio-arena judge runs/appointment_bench/<timestamp>_claude-sonnet-4-5
 ```
 
 ## Installation
@@ -42,19 +56,15 @@ uv run audio-arena judge runs/conversation_bench/<timestamp>_claude-sonnet-4-5
 Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
 
 ```bash
-git clone https://github.com/Design-Arena/conversation-bench.git
-cd conversation-bench
+git clone https://github.com/Design-Arena/audio-arena.git
+cd audio-arena
 uv sync
 ```
 
-Audio files are hosted on Hugging Face and downloaded automatically when you first run a benchmark. To pre-download:
+Audio files are hosted on Hugging Face and downloaded automatically when you first run a benchmark. To pre-download manually:
 
 ```bash
-# Download audio for a specific benchmark
-uv run audio-arena download conversation_bench
-
-# Or download manually with huggingface-cli
-huggingface-cli download arcada-labs/conversation-bench --local-dir benchmarks/conversation_bench --include "audio/*.wav"
+huggingface-cli download arcada-labs/appointment-bench --local-dir benchmarks/appointment_bench --include "audio/*.wav"
 ```
 
 ## Environment Variables
@@ -62,9 +72,9 @@ huggingface-cli download arcada-labs/conversation-bench --local-dir benchmarks/c
 Set the API keys for the services you want to use. You only need the keys for the models you plan to test.
 
 ```bash
-# Judging keys
-export ANTHROPIC_API_KEY=sk-ant-...  # Default judge for conversation_bench
-export OPENAI_API_KEY=sk-...         # Required for OpenAI judge and OpenAI models
+# Judging key (Claude is the default judge for all benchmarks)
+export ANTHROPIC_API_KEY=sk-ant-...
+export OPENAI_API_KEY=sk-...         # Required for OpenAI judge override and OpenAI models
 
 # Model provider keys (set whichever you need)
 export GOOGLE_API_KEY=...             # Google (Gemini text and Gemini Live)
@@ -90,13 +100,13 @@ uv run audio-arena run <benchmark> --model <model> --service <service>
 
 # Examples:
 uv run audio-arena run conversation_bench --model claude-sonnet-4-5 --service anthropic
-uv run audio-arena run conversation_bench --model gpt-4o --service openai
-uv run audio-arena run conversation_bench --model gemini-2.5-flash --service google
+uv run audio-arena run appointment_bench --model gpt-4o --service openai
+uv run audio-arena run grocery_bench --model gemini-2.5-flash --service google
 
 # Realtime audio models 
 uv run audio-arena run conversation_bench --model gpt-realtime --service openai-realtime
-uv run audio-arena run conversation_bench --model gemini-2.5-flash-native-audio-preview-12-2025 --service gemini-live
-uv run audio-arena run conversation_bench --model ultravox-v0.7 --service ultravox-realtime
+uv run audio-arena run event_bench --model gemini-2.5-flash-native-audio-preview-12-2025 --service gemini-live
+uv run audio-arena run product_bench --model ultravox-v0.7 --service ultravox-realtime
 
 # Nova Sonic (no --service needed, pipeline creates its own LLM)
 uv run audio-arena run conversation_bench --model amazon.nova-2-sonic-v1:0 --pipeline nova-sonic
@@ -105,7 +115,7 @@ uv run audio-arena run conversation_bench --model amazon.nova-2-sonic-v1:0 --pip
 uv run audio-arena run conversation_bench --model grok-realtime
 
 # Debug with limited turns
-uv run audio-arena run conversation_bench --model gpt-4o --service openai --only-turns 0,1,2
+uv run audio-arena run appointment_bench --model gpt-4o --service openai --only-turns 0,1,2
 
 # Rehydrated single-turn replay against prior golden context
 uv run audio-arena run event_bench --model gpt-realtime-1.5 --service openai-realtime --rehydrate
@@ -124,8 +134,8 @@ uv run audio-arena run conversation_bench --model gpt-4o --service openai --verb
 After a benchmark run completes, judge the results:
 
 ```bash
-# Judge a specific run
-uv run audio-arena judge runs/conversation_bench/20251213T123456_claude-sonnet-4-5
+# Judge a specific run (defaults to Claude judge)
+uv run audio-arena judge runs/appointment_bench/20251213T123456_gpt-4o
 
 # Judge with specific turns
 uv run audio-arena judge runs/conversation_bench/20251213T123456_claude-sonnet-4-5 --only-turns 0,1,2
@@ -133,13 +143,11 @@ uv run audio-arena judge runs/conversation_bench/20251213T123456_claude-sonnet-4
 # Use a different judge model
 uv run audio-arena judge runs/conversation_bench/20251213T123456_claude-sonnet-4-5 --judge-model claude-sonnet-4-5
 
-# Force the OpenAI judge backend
+# Use the OpenAI judge backend instead
 uv run audio-arena judge runs/event_bench/20260310T011417_gpt-realtime-1.5_52ea9df5 --judge openai
 ```
 
-Judge backend defaults are benchmark-dependent:
-- `conversation_bench` defaults to Claude
-- `appointment_bench`, `event_bench`, and `grocery_bench` default to OpenAI
+All benchmarks default to the Claude judge (`claude-opus-4-5`). Use `--judge openai` to switch to the OpenAI judge (`gpt-5.2`).
 
 The judge evaluates each turn on up to 5 dimensions:
 
@@ -154,8 +162,8 @@ The judge evaluates each turn on up to 5 dimensions:
 In plain language, these grader metrics mean:
 
 - `tool_use_correct`: The assistant used the right tool at the right time, with the right arguments, and did not skip a required tool call.
-- `instruction_following`: The assistant actually completed the user’s request for that turn. This is about answering the question or advancing the task, not just sounding plausible.
-- `kb_grounding`: The assistant’s factual claims are supported by the benchmark knowledge base or by tool results returned during the conversation.
+- `instruction_following`: The assistant actually completed the user's request for that turn. This is about answering the question or advancing the task, not just sounding plausible.
+- `kb_grounding`: The assistant's factual claims are supported by the benchmark knowledge base or by tool results returned during the conversation.
 - `state_tracking`: The assistant stayed consistent with earlier turns, including prior registrations, cancellations, corrections, and other conversation state.
 - `ambiguity_handling`: The assistant handled under-specified or ambiguous requests correctly, such as asking for clarification when needed or resolving the ambiguity from available context.
 
@@ -180,24 +188,9 @@ Judge outputs (saved to the run directory):
 - `<judge>_analysis.md` — human-readable report with failures
 - `<judge>_judged.jsonl` — per-turn judgments with reasoning
 
-For example, OpenAI judging writes `openai_summary.json`, `openai_analysis.md`, and `openai_judged.jsonl`.
+For example, Claude judging writes `claude_summary.json`, `claude_analysis.md`, and `claude_judged.jsonl`.
 
 See the [Methodology](#methodology) section for details on two-phase evaluation, penalty absorption, and category-aware scoring.
-
-### Downloading Audio
-
-Audio files are hosted on Hugging Face and downloaded automatically the first time you run a benchmark. You can also pre-download explicitly:
-
-```bash
-# Pre-download audio for a benchmark
-uv run audio-arena download conversation_bench
-```
-
-Or download manually with the HF CLI:
-
-```bash
-huggingface-cli download arcada-labs/conversation-bench --local-dir benchmarks/conversation_bench --include "audio/*.wav"
-```
 
 ### Real Audio (Human-Recorded)
 
@@ -230,16 +223,6 @@ To pre-download real audio manually:
 
 ```bash
 huggingface-cli download arcada-labs/appointment-bench --local-dir benchmarks/appointment_bench --include "real_audio/**/*.wav"
-```
-
-To upload real audio recordings to HF:
-
-```bash
-# Upload a specific speaker's recordings
-uv run python scripts/publish_to_hf.py appointment_bench --repo arcada-labs/appointment-bench --real-audio-only --speaker person1
-
-# Upload all speakers
-uv run python scripts/publish_to_hf.py appointment_bench --repo arcada-labs/appointment-bench --real-audio-only
 ```
 
 ### Listing Options
@@ -282,23 +265,6 @@ uv run audio-arena run conversation_bench \
     --service pipecat.services.openai.llm.OpenAILLMService
 ```
 
-## Benchmarks
-
-Benchmarks are located in `benchmarks/`. Each benchmark is a self-contained Python package with:
-- `config.py` - Benchmark configuration (turns, tools, system instruction, HF repo)
-- `turns.py` - Turn definitions with golden answers
-- `tools.py` - Tool/function schema definitions
-- `system.py` - System prompt with knowledge base
-- `data/knowledge_base.txt` - Knowledge base content
-- `audio/` - TTS audio, downloaded automatically from Hugging Face on first run
-- `real_audio/` - Human-recorded audio per speaker, downloaded from HF when `--real-audio` is used
-
-### Available Benchmarks
-
-| Benchmark | Turns | HF Dataset | Description |
-|-----------|-------|------------|-------------|
-| `conversation_bench` | 75 | [arcada-labs/conversation-bench](https://huggingface.co/datasets/arcada-labs/conversation-bench) | Conference assistant with ~12K token KB and 9 tools |
-
 ## Pipelines
 
 | Pipeline | Use Case | Auto-Detection Pattern |
@@ -310,12 +276,12 @@ Benchmarks are located in `benchmarks/`. Each benchmark is a self-contained Pyth
 
 ## Output Structure
 
-Runs are saved to `runs/<benchmark>/<timestamp>_<model>/`:
+Runs are saved to `runs/<benchmark>/<timestamp>_<model>/` (gitignored):
 
 ```
 runs/
-└── conversation_bench/
-    └── 20251213T123456_claude-sonnet-4-5/
+└── appointment_bench/
+    └── 20251213T123456_gpt-4o/
         ├── transcript.jsonl        # Turn-by-turn results
         ├── runtime.json            # Run metadata and metrics
         ├── run.log                 # Debug logs
@@ -330,7 +296,6 @@ runs/
 audio-arena/
 ├── src/audio_arena/               # Main package
 │   ├── cli.py                     # CLI entry point
-│   ├── data.py                    # HF dataset download utility
 │   ├── pipelines/                 # Pipeline implementations
 │   │   ├── base.py                # Abstract base pipeline
 │   │   ├── text.py                # Text pipeline
@@ -342,23 +307,38 @@ audio-arena/
 │   ├── transports/                # Input/output transports
 │   ├── recording/                 # Transcript recording
 │   └── judging/                   # Judge implementations
+│       ├── llm_judge.py           # Claude judge
+│       └── openai_judge.py        # OpenAI judge
 │
-├── benchmarks/
-│   └── conversation_bench/        # 75-turn conference assistant
-│       ├── config.py              # HF repo: arcada-labs/conversation-bench
-│       ├── turns.py, tools.py, system.py
+├── benchmarks/                    # Benchmark packages
+│   ├── conversation_bench/        # 75-turn conference assistant
+│   ├── appointment_bench/         # 25-turn dental appointment scheduling
+│   ├── assistant_bench/           # 31-turn personal assistant
+│   ├── event_bench/               # 29-turn event planning
+│   ├── grocery_bench/             # 30-turn grocery ordering
+│   └── product_bench/             # 31-turn laptop comparison
+│       ├── config.py              # HF repo, description, turn count
+│       ├── turns.py               # Turn definitions with golden answers
+│       ├── tools.py               # Tool/function schemas
+│       ├── system.py              # System prompt + knowledge base
 │       ├── data/knowledge_base.txt
-│       ├── audio/                 # TTS audio, downloaded from HF (gitignored)
-│       └── real_audio/            # Human-recorded audio, downloaded from HF (gitignored)
+│       ├── audio/                 # TTS audio (gitignored, downloaded from HF)
+│       └── real_audio/            # Human-recorded audio (gitignored, downloaded from HF)
 │
 ├── scripts/
-│   └── analyze_turn_metrics.py    # Per-turn timing analysis
+│   ├── run_all_benchmarks.py      # Run all S2S models on all benchmarks
+│   ├── analyze_turn_metrics.py    # Per-turn timing analysis
+│   ├── compare_model_runs.py      # Multi-model comparison with CSV + plots
+│   ├── build_experiment_review.py # Self-contained HTML review for a judged run
+│   ├── generate_audio.py          # TTS WAV generation for benchmark turns
+│   └── ...                        # Additional analysis and batch scripts
+│
 ├── runs/                          # Output directory (gitignored)
 ├── LICENSE
 └── pyproject.toml
 ```
 
-Audio files (~80MB per benchmark) are stored on Hugging Face, not in this repo. The code auto-downloads them on first run.
+Audio files are stored on Hugging Face, not in this repo. They are downloaded automatically on first run.
 
 ## Comprehensive Turn Metrics Analysis
 
@@ -412,30 +392,7 @@ uv run python scripts/analyze_turn_metrics.py runs/conversation_bench/<timestamp
 
 ## Methodology
 
-### Original benchmark
-
-ConversationBench builds on the original [30-turn multi-turn evaluation](https://github.com/kwindla/aiewf-eval) created by [Kwindla Kramer](https://github.com/kwindla) at [Daily](https://www.daily.co/) ([blog post](https://www.daily.co/blog/benchmarking-llms-for-voice-agent-use-cases/)). That benchmark tested both text and speech-to-speech models on tool use, instruction following, and knowledge base grounding in an AI Engineer World's Fair conference assistant scenario. It used a [Pipecat](https://github.com/pipecat-ai/pipecat)-based evaluation pipeline to drive multi-turn conversations against models from OpenAI, Google, Anthropic, and others, with Claude as an automated judge.
-
-The original 30-turn benchmark was an important proof of concept — it demonstrated that multi-turn conversation evaluation over audio was both feasible and revealing. However, during development of ConversationBench we found that 30 turns were not sufficiently challenging: most frontier models scored above 90% on nearly every category, making it difficult to differentiate between models or identify meaningful failure modes.
-
-### What changed in ConversationBench
-
-We replaced the majority of the original turns and rebuilt the benchmark from scratch as a **75-turn static hard benchmark**. Only a small number of basic QA and tool-use turns from the original were retained, and even those were revised.
-
-Key changes:
-
-- **Most original questions were removed.** Only a handful of basic QA and tool-use turns were retained (and revised). The remaining turns are entirely new.
-- **2.5x more turns.** The benchmark grew from 30 to 75 turns, enabling deeper stateful conversation testing and longer-range memory challenges.
-- **Harder categories across the board:**
-  - *Adversarial traps* — authority appeals, plausible hallucinations, subtle prompt injection, near-miss entities, false recall
-  - *Multi-step tool use & long-range memory* — conditional logic, parallel chains, implicit requirements, rollbacks, recall across many turns
-  - *Error recovery* — cascading failures, partial success states, ambiguous error messages
-  - *Cancellation flow & state tracking* — changes of mind, correct handling of cancelled actions across turns
-  - *Ambiguity handling* — same-name entities, compound ambiguity, dependent or contradictory constraints
-  - *Implicit correction* — nested misconceptions, partial truths, false attributions
-  - *Distractor injection* — buried questions, emotional manipulation, technical tangents
-- **Expanded knowledge base.** The grounding document grew to 946 lines to support the more complex queries.
-- **New evaluation dimensions.** ConversationBench adds `state_tracking` and `ambiguity_handling` as scored dimensions, in addition to the original three (`tool_use_correct`, `instruction_following`, `kb_grounding`).
+The methodology below describes the scoring rubric used across all benchmarks. The detailed history section is specific to `conversation_bench`, which was the first and largest benchmark in the suite.
 
 ### Scoring Rubric
 
@@ -449,7 +406,15 @@ Key changes:
 
 **Turn-taking leniency.** For speech-to-speech runs, a `turn_taking` dimension captures audio timing issues (overlaps, interruptions, missing responses). When turn-taking fails, the judge is more lenient on `instruction_following` to account for transcription artifacts.
 
-The benchmark is **static**: the same 75 user inputs (and corresponding audio) are used for every run, with golden expectations defined in `benchmarks/conversation_bench/turns.py`, so results are comparable across models and runs.
+Each benchmark is **static**: the same user inputs (and corresponding audio) are used for every run, with golden expectations defined in each benchmark's `turns.py`, so results are comparable across models and runs.
+
+### ConversationBench history
+
+ConversationBench builds on the original [30-turn multi-turn evaluation](https://github.com/kwindla/aiewf-eval) created by [Kwindla Hultman Kramer](https://github.com/kwindla) at [Daily](https://www.daily.co/) ([blog post](https://www.daily.co/blog/benchmarking-llms-for-voice-agent-use-cases/)). That benchmark tested both text and speech-to-speech models on tool use, instruction following, and knowledge base grounding in an AI Engineer World's Fair conference assistant scenario. It used a [Pipecat](https://github.com/pipecat-ai/pipecat)-based evaluation pipeline to drive multi-turn conversations against models from OpenAI, Google, Anthropic, and others, with Claude as an automated judge.
+
+The original 30-turn benchmark was an important proof of concept — it demonstrated that multi-turn conversation evaluation over audio was both feasible and revealing. However, during development of ConversationBench we found that 30 turns were not sufficiently challenging: most frontier models scored above 90% on nearly every category, making it difficult to differentiate between models or identify meaningful failure modes.
+
+We replaced the majority of the original turns and rebuilt the benchmark from scratch as a **75-turn static hard benchmark**. Only a small number of basic QA and tool-use turns from the original were retained, and even those were revised. The remaining 5 benchmarks (`appointment_bench`, `assistant_bench`, `event_bench`, `grocery_bench`, `product_bench`) were built from scratch to test different domains and failure modes.
 
 ## Acknowledgments
 
@@ -459,14 +424,14 @@ Judging is powered by [Claude](https://www.anthropic.com/) via the [Claude Agent
 
 ## Citation
 
-If you use this benchmark, please cite:
+If you use these benchmarks, please cite:
 
 ```bibtex
 @misc{audioarena2026,
-  title={AudioArena: A Multi-Turn Speech-to-Speech Evaluation Benchmark},
+  title={Audio Arena: Multi-Turn Speech-to-Speech Evaluation Benchmarks},
   author={Arcada Labs},
   year={2026},
-  url={https://huggingface.co/datasets/arcada-labs/conversation-bench}
+  url={https://audioarena.ai}
 }
 ```
 

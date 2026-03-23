@@ -1,8 +1,8 @@
 """Generate WAV audio files for any benchmark's turns using OpenAI TTS.
 
 Usage:
-    uv run python scripts/generate_audio.py restaurant_bench
-    uv run python scripts/generate_audio.py travel_bench --voice nova
+    uv run python scripts/generate_audio.py appointment_bench
+    uv run python scripts/generate_audio.py grocery_bench --voice nova
     uv run python scripts/generate_audio.py product_bench --model tts-1
 """
 
@@ -34,7 +34,7 @@ def load_benchmark_turns(benchmark_name: str) -> list[dict]:
 
 def main():
     parser = argparse.ArgumentParser(description="Generate TTS audio for a benchmark")
-    parser.add_argument("benchmark", help="Benchmark name (e.g., restaurant_bench)")
+    parser.add_argument("benchmark", help="Benchmark name (e.g., appointment_bench)")
     parser.add_argument("--voice", default="echo", help="OpenAI TTS voice (default: echo)")
     parser.add_argument("--model", default="tts-1-hd", help="OpenAI TTS model (default: tts-1-hd)")
     parser.add_argument("--force", action="store_true", help="Regenerate existing files")
