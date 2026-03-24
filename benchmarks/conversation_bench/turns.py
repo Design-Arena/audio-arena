@@ -55,11 +55,10 @@ turns = [
  'categories': ['basic_qa'],
  'audio_file': 'audio/turn_002.wav'},
 
-{'input': 'How many sessions are in the MCP track?',
- 'golden_text': 'The MCP track on June 4th has 4 sessions: a keynote by Theodora Chu on MCP '
-                "Origins at 11:15 AM, David Cramer's talk at 12:15 PM, Alex Volkov on MCP "
-                "observability at 2:20 PM, and Harald Kirschner's talk on MCP capabilities at "
-                "3:00 PM. There are also 2 MCP-related workshops on June 3rd.",
+{'input': 'How many June 4 sessions are listed in the MCP track section?',
+ 'golden_text': 'The MCP track section lists 3 June 4 sessions: Theodora Chu at 11:15 AM, '
+                "David Cramer at 12:15 PM, and Alex Volkov at 2:20 PM. There are also 2 "
+                "MCP-related workshops on June 3rd.",
  'required_function_call': None,
  'categories': ['basic_qa'],
  'audio_file': 'audio/turn_003.wav'},
@@ -603,12 +602,12 @@ turns = [
 
 {'input': "If I have a 2-hour window from 1:00 to 3:00 PM on June 5th, what's the maximum "
           "number of non-overlapping sessions I could fit in that time?",
- 'golden_text': "With sessions typically running 20-30 minutes, you could fit 4 "
+ 'golden_text': "With sessions typically running 20-30 minutes, you could fit 3 full "
                 "non-overlapping sessions:\n\n"
                 "1. Retail AI at 1:15 PM (Fortune 500 track)\n"
                 "2. From Copilot to Autopilot at 1:45 PM (SWE Agents track)\n"
-                "3. Process Supervision for Mathematical Reasoning at 2:15 PM (Reasoning+RL track)\n"
-                "4. Retrieval-Augmented Generation at Scale at 2:45 PM (Retrieval+Search track)",
+                "3. Process Supervision for Mathematical Reasoning at 2:15 PM (Reasoning+RL track)\n\n"
+                "A 2:45 PM session would run past 3:00 PM, so it wouldn't fully fit in that window.",
  'required_function_call': None,
  'categories': ['numerical_reasoning'],
  'subcategory': 'schedule_optimization',
@@ -748,7 +747,8 @@ turns = [
  'subcategory': 'entity_counting',
  'audio_file': 'audio/turn_059.wav'},
 
-{'input': "Between everything we set up - suggestions, votes, registrations, and tech support - how many total actions did you take for me?",
+{'input': "If you count every action you took for me today, including registrations, "
+          "cancellations, conflict checks, and schedule changes, what's the total?",
  'golden_text': "Counting all tool actions:\n\n"
                 "- 2 session suggestions\n"
                 "- 1 dietary request (later canceled)\n"

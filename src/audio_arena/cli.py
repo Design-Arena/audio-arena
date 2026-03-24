@@ -13,7 +13,8 @@ import json
 import logging
 import os
 import sys
-from datetime import datetime
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -74,6 +75,9 @@ PIPELINE_CLASSES = {
 }
 
 REHYDRATED_TURN_RUNS_DIRNAME = "turn_runs"
+REHYDRATED_EMPTY_RESPONSE_TEXT = "[EMPTY_RESPONSE: No valid response after max retries]"
+DEFAULT_REHYDRATED_TURN_TIMEOUT_SECONDS = 180.0
+REHYDRATED_TURN_TIMEOUT_ENV_VAR = "AUDIO_ARENA_REHYDRATED_TURN_TIMEOUT_SECONDS"
 
 
 # ============================================================================
@@ -496,6 +500,90 @@ def read_jsonl_records(path: Path) -> list[dict]:
     return records
 
 
+def get_rehydrated_turn_timeout_seconds() -> float:
+    """Return the per-turn timeout for rehydrated worker tasks."""
+    raw_timeout = os.getenv(REHYDRATED_TURN_TIMEOUT_ENV_VAR)
+    if raw_timeout is None:
+        return DEFAULT_REHYDRATED_TURN_TIMEOUT_SECONDS
+
+    try:
+        timeout_seconds = float(raw_timeout)
+    except ValueError:
+        logger.warning(
+            f"Ignoring invalid {REHYDRATED_TURN_TIMEOUT_ENV_VAR}={raw_timeout!r}; "
+            f"using {DEFAULT_REHYDRATED_TURN_TIMEOUT_SECONDS:.1f}s"
+        )
+        return DEFAULT_REHYDRATED_TURN_TIMEOUT_SECONDS
+
+    if timeout_seconds <= 0:
+        logger.warning(
+            f"Ignoring non-positive {REHYDRATED_TURN_TIMEOUT_ENV_VAR}={raw_timeout!r}; "
+            f"using {DEFAULT_REHYDRATED_TURN_TIMEOUT_SECONDS:.1f}s"
+        )
+        return DEFAULT_REHYDRATED_TURN_TIMEOUT_SECONDS
+
+    return timeout_seconds
+
+
+def has_valid_single_turn_transcript(transcript_path: Path) -> bool:
+    """Return whether transcript_path contains exactly one valid JSONL row."""
+    if not transcript_path.exists():
+        return False
+
+    try:
+        records = read_jsonl_records(transcript_path)
+    except json.JSONDecodeError:
+        return False
+
+    return len(records) == 1
+
+
+def write_rehydrated_empty_response_artifact(
+    *,
+    turn_run_dir: Path,
+    model: str,
+    turn_index: int,
+    user_text: str,
+    reason: str,
+    latency_ms: Optional[int] = None,
+) -> None:
+    """Write a single-row empty-response artifact for a salvaged rehydrated turn."""
+    transcript_record = {
+        "ts": datetime.now(timezone.utc)
+        .isoformat(timespec="milliseconds")
+        .replace("+00:00", "Z"),
+        "turn": turn_index,
+        "model_name": model,
+        "user_text": user_text,
+        "assistant_text": REHYDRATED_EMPTY_RESPONSE_TEXT,
+        "tool_calls": [],
+        "tool_results": [],
+        "tokens": None,
+        "ttfb_ms": None,
+        "latency_ms": latency_ms,
+        "reconnection_count": 0,
+    }
+    (turn_run_dir / "transcript.jsonl").write_text(
+        json.dumps(transcript_record, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+    runtime = {
+        "model_name": model,
+        "turns": 1,
+        "mode": "rehydrated",
+        "turn": turn_index,
+        "note": "Runner-level salvage wrote an explicit empty-response transcript row.",
+        "salvaged_empty_response": True,
+        "salvage_reason": reason,
+        "latency_ms": latency_ms,
+    }
+    (turn_run_dir / "runtime.json").write_text(
+        json.dumps(runtime, indent=2),
+        encoding="utf-8",
+    )
+
+
 def finalize_rehydrated_run_artifacts(
     *,
     run_dir: Path,
@@ -530,6 +618,8 @@ def finalize_rehydrated_run_artifacts(
             "turn_run_dir": str(turn_run_dir),
             "success": success,
             "error": result.get("error"),
+            "salvaged_empty_response": bool(result.get("salvaged_empty_response")),
+            "salvage_reason": result.get("salvage_reason"),
             "transcript_path": str(transcript_path),
             "transcript_exists": transcript_path.exists(),
             "runtime_path": str(runtime_path),
@@ -1051,6 +1141,7 @@ async def _run_rehydrated(
 
     results: dict[int, dict] = {}
     turn_dir_width = max(3, len(str(len(all_turns) - 1)))
+    turn_timeout_seconds = get_rehydrated_turn_timeout_seconds()
 
     async def _run_single_turn(
         semaphore: asyncio.Semaphore,
@@ -1078,100 +1169,166 @@ async def _run_rehydrated(
                 pipeline_type=pipeline_type,
                 turn=target_turn,
             )
+            turn_start_monotonic = time.monotonic()
 
             try:
-                with logger.contextualize(
-                    rehydration_turn_dir=str(turn_run_dir),
-                    rehydration_target_turn=target_idx,
-                ):
-                    if use_oracle_split:
-                        capture_run_dir = turn_run_dir / "tool_capture"
-                        capture_benchmark = BenchmarkConfig()
-                        if real_audio_speaker:
-                            _setup_real_audio(capture_benchmark, real_audio_speaker)
-                        capture_recorder = TranscriptRecorder(capture_run_dir, model)
-                        capture_pipeline = pipeline_cls(capture_benchmark)
+                async def _execute_turn() -> None:
+                    with logger.contextualize(
+                        rehydration_turn_dir=str(turn_run_dir),
+                        rehydration_target_turn=target_idx,
+                    ):
+                        if use_oracle_split:
+                            capture_run_dir = turn_run_dir / "tool_capture"
+                            capture_benchmark = BenchmarkConfig()
+                            if real_audio_speaker:
+                                _setup_real_audio(capture_benchmark, real_audio_speaker)
+                            capture_recorder = TranscriptRecorder(capture_run_dir, model)
+                            capture_pipeline = pipeline_cls(capture_benchmark)
 
-                        try:
-                            await capture_pipeline.run(
-                                recorder=capture_recorder,
-                                model=model,
-                                service_class=service_class,
-                                service_name=service,
-                                turn_indices=[target_idx],
-                                rehydration_turns=golden_history,
-                                disable_vad=disable_vad,
-                                juice=juice,
-                                verbosity=verbosity,
-                                stop_after_first_tool_call=isinstance(
-                                    target_turn.get("required_function_call"),
-                                    dict,
-                                ),
-                            )
-                        finally:
-                            capture_recorder.close()
+                            try:
+                                await capture_pipeline.run(
+                                    recorder=capture_recorder,
+                                    model=model,
+                                    service_class=service_class,
+                                    service_name=service,
+                                    turn_indices=[target_idx],
+                                    rehydration_turns=golden_history,
+                                    disable_vad=disable_vad,
+                                    juice=juice,
+                                    verbosity=verbosity,
+                                    stop_after_first_tool_call=isinstance(
+                                        target_turn.get("required_function_call"),
+                                        dict,
+                                    ),
+                                )
+                            finally:
+                                capture_recorder.close()
 
-                        if isinstance(target_turn.get("required_function_call"), dict):
-                            live_tool_capture = (
-                                capture_pipeline.get_captured_tool_phase()
-                                or build_missing_tool_capture(target_turn)
+                            if isinstance(target_turn.get("required_function_call"), dict):
+                                live_tool_capture = (
+                                    capture_pipeline.get_captured_tool_phase()
+                                    or build_missing_tool_capture(target_turn)
+                                )
+                            else:
+                                live_tool_capture = build_live_tool_capture_from_transcript(
+                                    turn=target_turn,
+                                    transcript_path=capture_run_dir / "transcript.jsonl",
+                                )
+
+                            continuation_benchmark = BenchmarkConfig()
+                            if real_audio_speaker:
+                                _setup_real_audio(
+                                    continuation_benchmark, real_audio_speaker
+                                )
+                            continuation_recorder = TranscriptRecorder(turn_run_dir, model)
+                            continuation_pipeline = pipeline_cls(continuation_benchmark)
+                            try:
+                                await continuation_pipeline.run(
+                                    recorder=continuation_recorder,
+                                    model=model,
+                                    service_class=service_class,
+                                    service_name=service,
+                                    turn_indices=[target_idx],
+                                    rehydration_turns=build_oracle_continuation_history(
+                                        golden_history,
+                                        target_turn,
+                                    ),
+                                    disable_vad=disable_vad,
+                                    juice=juice,
+                                    verbosity=verbosity,
+                                    oracle_continuation_only=True,
+                                )
+                            finally:
+                                continuation_recorder.close()
+
+                            merge_oracle_continuation_artifacts(
+                                transcript_path=turn_run_dir / "transcript.jsonl",
+                                live_tool_capture=live_tool_capture,
                             )
                         else:
-                            live_tool_capture = build_live_tool_capture_from_transcript(
-                                turn=target_turn,
-                                transcript_path=capture_run_dir / "transcript.jsonl",
-                            )
+                            turn_benchmark = BenchmarkConfig()
+                            if real_audio_speaker:
+                                _setup_real_audio(turn_benchmark, real_audio_speaker)
+                            recorder = TranscriptRecorder(turn_run_dir, model)
+                            pipeline_instance = pipeline_cls(turn_benchmark)
+                            try:
+                                await pipeline_instance.run(
+                                    recorder=recorder,
+                                    model=model,
+                                    service_class=service_class,
+                                    service_name=service,
+                                    turn_indices=[target_idx],
+                                    rehydration_turns=golden_history,
+                                    disable_vad=disable_vad,
+                                    juice=juice,
+                                    verbosity=verbosity,
+                                )
+                            finally:
+                                recorder.close()
 
-                        continuation_benchmark = BenchmarkConfig()
-                        if real_audio_speaker:
-                            _setup_real_audio(
-                                continuation_benchmark, real_audio_speaker
-                            )
-                        continuation_recorder = TranscriptRecorder(turn_run_dir, model)
-                        continuation_pipeline = pipeline_cls(continuation_benchmark)
-                        try:
-                            await continuation_pipeline.run(
-                                recorder=continuation_recorder,
-                                model=model,
-                                service_class=service_class,
-                                service_name=service,
-                                turn_indices=[target_idx],
-                                rehydration_turns=build_oracle_continuation_history(
-                                    golden_history,
-                                    target_turn,
-                                ),
-                                disable_vad=disable_vad,
-                                juice=juice,
-                                verbosity=verbosity,
-                                oracle_continuation_only=True,
-                            )
-                        finally:
-                            continuation_recorder.close()
+                turn_task = asyncio.create_task(_execute_turn())
+                _, pending = await asyncio.wait(
+                    {turn_task},
+                    timeout=turn_timeout_seconds,
+                )
+                if pending:
+                    turn_task.cancel()
+                    await asyncio.wait({turn_task}, timeout=5.0)
+                    latency_ms = int((time.monotonic() - turn_start_monotonic) * 1000)
+                    reason = (
+                        f"Timed out after {turn_timeout_seconds:.1f}s while executing "
+                        f"rehydrated turn {target_idx}"
+                    )
+                    logger.error(reason)
+                    write_rehydrated_empty_response_artifact(
+                        turn_run_dir=turn_run_dir,
+                        model=model,
+                        turn_index=target_idx,
+                        user_text=str(target_turn.get("input", "") or ""),
+                        reason=reason,
+                        latency_ms=latency_ms,
+                    )
+                    results[target_idx] = {
+                        "success": True,
+                        "turn_run_dir": str(turn_run_dir),
+                        "error": None,
+                        "salvaged_empty_response": True,
+                        "salvage_reason": reason,
+                    }
+                    click.echo(
+                        f"[Rehydration] Turn {target_idx} salvaged as empty response after timeout"
+                    )
+                    return
 
-                        merge_oracle_continuation_artifacts(
-                            transcript_path=turn_run_dir / "transcript.jsonl",
-                            live_tool_capture=live_tool_capture,
-                        )
-                    else:
-                        turn_benchmark = BenchmarkConfig()
-                        if real_audio_speaker:
-                            _setup_real_audio(turn_benchmark, real_audio_speaker)
-                        recorder = TranscriptRecorder(turn_run_dir, model)
-                        pipeline_instance = pipeline_cls(turn_benchmark)
-                        try:
-                            await pipeline_instance.run(
-                                recorder=recorder,
-                                model=model,
-                                service_class=service_class,
-                                service_name=service,
-                                turn_indices=[target_idx],
-                                rehydration_turns=golden_history,
-                                disable_vad=disable_vad,
-                                juice=juice,
-                                verbosity=verbosity,
-                            )
-                        finally:
-                            recorder.close()
+                turn_task.result()
+                transcript_path = turn_run_dir / "transcript.jsonl"
+                if not has_valid_single_turn_transcript(transcript_path):
+                    latency_ms = int((time.monotonic() - turn_start_monotonic) * 1000)
+                    reason = (
+                        "Pipeline returned without a valid single-row transcript.jsonl "
+                        f"for rehydrated turn {target_idx}"
+                    )
+                    logger.warning(reason)
+                    write_rehydrated_empty_response_artifact(
+                        turn_run_dir=turn_run_dir,
+                        model=model,
+                        turn_index=target_idx,
+                        user_text=str(target_turn.get("input", "") or ""),
+                        reason=reason,
+                        latency_ms=latency_ms,
+                    )
+                    results[target_idx] = {
+                        "success": True,
+                        "turn_run_dir": str(turn_run_dir),
+                        "error": None,
+                        "salvaged_empty_response": True,
+                        "salvage_reason": reason,
+                    }
+                    click.echo(
+                        f"[Rehydration] Turn {target_idx} salvaged as empty response after invalid transcript"
+                    )
+                    return
+
                 results[target_idx] = {
                     "success": True,
                     "turn_run_dir": str(turn_run_dir),
@@ -1191,7 +1348,6 @@ async def _run_rehydrated(
                     "error": str(e),
                 }
             finally:
-                recorder.close()
                 try:
                     logger.remove(turn_sink_id)
                 except ValueError:

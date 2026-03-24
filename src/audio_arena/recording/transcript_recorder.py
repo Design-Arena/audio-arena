@@ -141,6 +141,40 @@ class TranscriptRecorder:
         """
         self.turn_results.append({"name": name, "response": response})
 
+    @staticmethod
+    def _sanitize_for_json(value: Any) -> Any:
+        """Convert non-JSON-native runtime objects into stable JSON-friendly data."""
+        if value is None or isinstance(value, (str, int, float, bool)):
+            return value
+        if isinstance(value, Path):
+            return str(value)
+        if isinstance(value, dict):
+            return {
+                str(key): TranscriptRecorder._sanitize_for_json(item)
+                for key, item in value.items()
+            }
+        if isinstance(value, (list, tuple, set)):
+            return [TranscriptRecorder._sanitize_for_json(item) for item in value]
+        if hasattr(value, "model_dump"):
+            try:
+                return TranscriptRecorder._sanitize_for_json(
+                    value.model_dump(exclude_none=True)
+                )
+            except TypeError:
+                return TranscriptRecorder._sanitize_for_json(value.model_dump())
+        if hasattr(value, "__dict__"):
+            try:
+                return {
+                    "__type__": type(value).__name__,
+                    "fields": TranscriptRecorder._sanitize_for_json(vars(value)),
+                }
+            except TypeError:
+                pass
+        return {
+            "__type__": type(value).__name__,
+            "repr": repr(value),
+        }
+
     def write_turn(
         self, *, user_text: str, assistant_text: str, reconnection_count: int = 0
     ):
@@ -168,7 +202,9 @@ class TranscriptRecorder:
             "latency_ms": latency_ms,
             "reconnection_count": reconnection_count,
         }
-        self.fp.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        self.fp.write(
+            json.dumps(self._sanitize_for_json(rec), ensure_ascii=False) + "\n"
+        )
         self.fp.flush()
         self.total_turns_scored += 1
         logger.info(f"Recorded turn {self.turn_index}: {assistant_text[:100]}...")

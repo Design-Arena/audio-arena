@@ -1477,6 +1477,8 @@ def write_outputs(
     has_failures = False
     for rec in records:
         turn = rec["turn"]
+        if turn not in judgments:
+            continue
         judgment = judgments[turn]
         scores = judgment["scores"]
 

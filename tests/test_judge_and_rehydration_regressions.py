@@ -20,6 +20,8 @@ from audio_arena.judging.llm_judge import (
     write_outputs,
 )
 from audio_arena.cli import (
+    REHYDRATED_EMPTY_RESPONSE_TEXT,
+    _run_rehydrated,
     build_live_tool_capture_from_transcript,
     build_missing_tool_capture,
     build_oracle_continuation_history,
@@ -30,6 +32,7 @@ from benchmarks.appointment_bench.turns import turns as appointment_turns
 from benchmarks.assistant_bench.turns import turns as assistant_turns
 from benchmarks.conversation_bench.turns import turns as conversation_turns
 from audio_arena.pipelines.openai_realtime import OpenAIRealtimeLLMServiceExplicitToolResult
+from audio_arena.recording.transcript_recorder import TranscriptRecorder
 from audio_arena.pipelines.realtime import RealtimePipeline
 from audio_arena.pipelines.text import TextPipeline
 from benchmarks.product_bench.turns import turns as product_turns
@@ -1057,6 +1060,65 @@ class JudgeAndRehydrationRegressionTests(unittest.TestCase):
         self.assertFalse(capture["tool_args_correct"])
         self.assertEqual(capture["oracle_tool_results"], [{"status": "success", "event_id": "EVT-3001"}])
 
+    def test_run_rehydrated_salvages_timed_out_turn_as_empty_response(self):
+        class HangingPipeline:
+            requires_service = False
+
+            def __init__(self, benchmark):
+                self.benchmark = benchmark
+
+            async def run(self, **kwargs):
+                await asyncio.sleep(60)
+
+        with TemporaryDirectory() as tmpdir:
+            run_dir = Path(tmpdir)
+            with (
+                patch.dict(
+                    "os.environ",
+                    {"AUDIO_ARENA_REHYDRATED_TURN_TIMEOUT_SECONDS": "0.01"},
+                    clear=False,
+                ),
+                patch("audio_arena.cli.load_benchmark", return_value=DummyBenchmark),
+                patch("audio_arena.cli.get_pipeline_class", return_value=HangingPipeline),
+                patch("audio_arena.cli.create_run_directory", return_value=run_dir),
+                patch("audio_arena.cli.setup_logging"),
+                patch("audio_arena.cli.add_turn_logging_sink", return_value=999),
+                patch("audio_arena.cli.logger.remove", side_effect=ValueError()),
+            ):
+                asyncio.run(
+                    _run_rehydrated(
+                        benchmark_name="dummy_bench",
+                        model="test-model",
+                        service=None,
+                        pipeline_type="text",
+                        only_turns=None,
+                        verbose=False,
+                        max_parallel=1,
+                        disable_vad=False,
+                    )
+                )
+
+            transcript_rows = [
+                json.loads(line)
+                for line in (run_dir / "transcript.jsonl").read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+            manifest = json.loads(
+                (run_dir / "rehydrated_manifest.json").read_text(encoding="utf-8")
+            )
+            turn_runtime = json.loads(
+                (run_dir / "turn_runs" / "turn_000" / "runtime.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+
+        self.assertEqual(len(transcript_rows), 1)
+        self.assertEqual(transcript_rows[0]["assistant_text"], REHYDRATED_EMPTY_RESPONSE_TEXT)
+        self.assertEqual(transcript_rows[0]["user_text"], "target turn")
+        self.assertTrue(manifest["turns"][0]["salvaged_empty_response"])
+        self.assertIn("Timed out after", manifest["turns"][0]["salvage_reason"])
+        self.assertTrue(turn_runtime["salvaged_empty_response"])
+
     def test_merge_oracle_continuation_artifacts_rewrites_single_turn_transcript(self):
         with TemporaryDirectory() as tmpdir:
             transcript_path = Path(tmpdir) / "transcript.jsonl"
@@ -1331,6 +1393,38 @@ class JudgeAndRehydrationRegressionTests(unittest.TestCase):
             False,
         )
 
+    def test_transcript_recorder_sanitizes_non_json_native_tool_results(self):
+        with TemporaryDirectory() as tmpdir:
+            recorder = TranscriptRecorder(Path(tmpdir), "test-model")
+            recorder.start_turn(0)
+            recorder.record_tool_result(
+                "lookup_session",
+                {
+                    "status": "success",
+                    "properties": FunctionCallResultProperties(run_llm=False),
+                },
+            )
+            recorder.write_turn(user_text="hello", assistant_text="done")
+            recorder.close()
+
+            rows = [
+                json.loads(line)
+                for line in (Path(tmpdir) / "transcript.jsonl").read_text(
+                    encoding="utf-8"
+                ).splitlines()
+                if line.strip()
+            ]
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(
+            rows[0]["tool_results"][0]["response"]["properties"]["__type__"],
+            "FunctionCallResultProperties",
+        )
+        self.assertEqual(
+            rows[0]["tool_results"][0]["response"]["properties"]["fields"]["run_llm"],
+            False,
+        )
+
     def test_function_call_output_serializes_non_json_native_tool_result_fields(self):
         service = OpenAIRealtimeLLMServiceExplicitToolResult.__new__(
             OpenAIRealtimeLLMServiceExplicitToolResult
@@ -1368,6 +1462,64 @@ class JudgeAndRehydrationRegressionTests(unittest.TestCase):
             captured_outputs[0]["properties"]["run_llm"],
             False,
         )
+
+    def test_write_outputs_skips_sparse_transcript_turns_missing_judgments(self):
+        records = [
+            {
+                "turn": 0,
+                "user_text": "first",
+                "assistant_text": "first reply",
+                "tool_calls": [],
+                "tool_results": [],
+            },
+            {
+                "turn": 1,
+                "user_text": "second",
+                "assistant_text": "[EMPTY_RESPONSE: No valid response after max retries]",
+                "tool_calls": [],
+                "tool_results": [],
+            },
+        ]
+        judgments = {
+            0: {
+                "scores": {
+                    "turn_taking": True,
+                    "tool_use_correct": True,
+                    "instruction_following": True,
+                    "kb_grounding": True,
+                    "ambiguity_handling": None,
+                    "state_tracking": None,
+                },
+                "reasoning": "Turn 0 passed.",
+            }
+        }
+
+        with TemporaryDirectory() as tmpdir:
+            run_dir = Path(tmpdir)
+            write_outputs(
+                run_dir=run_dir,
+                records=records,
+                judgments=judgments,
+                summary="",
+                model_name="test-model",
+                judge_name="openai",
+                judge_version="test-version",
+                judge_model="test-judge",
+            )
+
+            analysis_text = (run_dir / "openai_analysis.md").read_text(
+                encoding="utf-8"
+            )
+            judged_rows = [
+                json.loads(line)
+                for line in (run_dir / "openai_judged.jsonl").read_text(
+                    encoding="utf-8"
+                ).splitlines()
+                if line.strip()
+            ]
+
+        self.assertEqual(len(judged_rows), 1)
+        self.assertIn("No failures", analysis_text)
 
 
 if __name__ == "__main__":
