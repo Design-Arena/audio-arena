@@ -410,7 +410,7 @@ turns = [
  'audio_file': 'audio/turn_034.wav'},
 
 {'input': "Register me for BOTH Kevin Zhang talks - the one from Together AI and the one from "
-          "Anthropic. Then tell me if there's a time conflict between them or if I can attend both.",
+          "Anthropic, and make sure they don't conflict.",
  'golden_text': "I've registered you for both Kevin Zhang sessions:\n\n"
                 "1. Kevin Zhang (Together AI): 'Open Source LLM Serving' - June 4th at 4:00 PM\n"
                 "2. Kevin Zhang (Anthropic): 'Red Teaming AI Systems: Lessons from the Field' - June 5th at 1:30 PM\n\n"
@@ -430,7 +430,7 @@ turns = [
  'audio_file': 'audio/turn_035.wav'},
 
 {'input': "I want to make sure I don't miss any of the GraphRAG content on June 4th. Can you "
-          "handle that for me?",
+          "handle that for me and make sure they don't overlap?",
  'golden_text': "I found 2 GraphRAG sessions on June 4th and registered you for both:\n\n"
                 "1. 'Knowledge Graphs Meet LLMs: The GraphRAG Revolution' at 11:00 AM\n"
                 "2. 'Building Enterprise Knowledge Graphs' at 1:15 PM\n\n"
