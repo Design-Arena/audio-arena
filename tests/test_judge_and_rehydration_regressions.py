@@ -19,6 +19,18 @@ from audio_arena.judging.llm_judge import (
     get_turn_taking_support,
     write_outputs,
 )
+from audio_arena.judging.openai_judge import (
+    OPENAI_JUDGE_CONCURRENCY,
+    OPENAI_JUDGE_CONCURRENCY_ENV_VAR,
+    OPENAI_JUDGE_PROMPT_CACHE_RETENTION,
+    OPENAI_JUDGE_SERVICE_TIER,
+    OPENAI_JUDGE_TIMEOUT_ENV_VAR,
+    OPENAI_JUDGE_TIMEOUT_SECONDS,
+    build_openai_judge_prompt_cache_key,
+    build_openai_responses_request_kwargs,
+    get_openai_judge_concurrency,
+    get_openai_judge_timeout_seconds,
+)
 from audio_arena.cli import (
     REHYDRATED_EMPTY_RESPONSE_TEXT,
     _run_rehydrated,
@@ -1520,6 +1532,82 @@ class JudgeAndRehydrationRegressionTests(unittest.TestCase):
 
         self.assertEqual(len(judged_rows), 1)
         self.assertIn("No failures", analysis_text)
+
+    def test_openai_judge_timeout_uses_default_and_env_override(self):
+        with patch.dict("os.environ", {}, clear=False):
+            self.assertEqual(
+                get_openai_judge_timeout_seconds(),
+                OPENAI_JUDGE_TIMEOUT_SECONDS,
+            )
+
+        with patch.dict(
+            "os.environ",
+            {OPENAI_JUDGE_TIMEOUT_ENV_VAR: "45"},
+            clear=False,
+        ):
+            self.assertEqual(get_openai_judge_timeout_seconds(), 45.0)
+
+        with patch.dict(
+            "os.environ",
+            {OPENAI_JUDGE_TIMEOUT_ENV_VAR: "0"},
+            clear=False,
+        ):
+            self.assertEqual(
+                get_openai_judge_timeout_seconds(),
+                OPENAI_JUDGE_TIMEOUT_SECONDS,
+            )
+
+    def test_openai_judge_concurrency_uses_default_and_env_override(self):
+        with patch.dict("os.environ", {}, clear=False):
+            self.assertEqual(
+                get_openai_judge_concurrency(),
+                OPENAI_JUDGE_CONCURRENCY,
+            )
+
+        with patch.dict(
+            "os.environ",
+            {OPENAI_JUDGE_CONCURRENCY_ENV_VAR: "4"},
+            clear=False,
+        ):
+            self.assertEqual(get_openai_judge_concurrency(), 4)
+
+        with patch.dict(
+            "os.environ",
+            {OPENAI_JUDGE_CONCURRENCY_ENV_VAR: "0"},
+            clear=False,
+        ):
+            self.assertEqual(
+                get_openai_judge_concurrency(),
+                OPENAI_JUDGE_CONCURRENCY,
+            )
+
+    def test_openai_responses_request_uses_priority_and_prompt_cache(self):
+        prompt_cache_key = build_openai_judge_prompt_cache_key(
+            Path("/tmp/runs/conversation_bench/example_run"),
+            judge_version="openai-v11-rehydrated-oracle-continuation",
+            judge_model="gpt-5.2",
+            cross_turn_realignment=False,
+        )
+
+        kwargs = build_openai_responses_request_kwargs(
+            judge_model="gpt-5.2",
+            system_prompt="system",
+            prompt="user prompt",
+            prompt_cache_key=prompt_cache_key,
+        )
+
+        self.assertEqual(kwargs["model"], "gpt-5.2")
+        self.assertEqual(kwargs["instructions"], "system")
+        self.assertEqual(kwargs["input"], "user prompt")
+        self.assertEqual(kwargs["service_tier"], OPENAI_JUDGE_SERVICE_TIER)
+        self.assertEqual(kwargs["prompt_cache_key"], prompt_cache_key)
+        self.assertLessEqual(len(prompt_cache_key), 64)
+        self.assertEqual(
+            kwargs["prompt_cache_retention"],
+            OPENAI_JUDGE_PROMPT_CACHE_RETENTION,
+        )
+        self.assertEqual(kwargs["temperature"], 0)
+        self.assertEqual(kwargs["text"]["format"]["type"], "json_schema")
 
 
 if __name__ == "__main__":

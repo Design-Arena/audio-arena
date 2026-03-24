@@ -1,15 +1,19 @@
 """
 OpenAI-based transcript judge (mode-aware realignment + over-clarification handling).
 
-Mirrors the Claude judge but uses OpenAI's chat completions API.
+Mirrors the Claude judge but uses OpenAI's Responses API.
 
 Usage via CLI:
     uv run audio-arena judge runs/grocery_bench/20251215T202910_gpt-4o-... --judge openai
     uv run audio-arena judge runs/... --judge openai --judge-model o3
 """
 
-import sys
 import json
+import hashlib
+import os
+import sys
+import time
+import asyncio
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 
@@ -31,10 +35,149 @@ from .llm_judge import (
 OPENAI_JUDGE_VERSION = "openai-v10-kb-visible-vs-tool-only"
 OPENAI_REHYDRATED_JUDGE_VERSION = "openai-v11-rehydrated-oracle-continuation"
 OPENAI_JUDGE_MODEL = "gpt-5.2"
+OPENAI_JUDGE_TIMEOUT_ENV_VAR = "AUDIO_ARENA_OPENAI_JUDGE_TIMEOUT_SECONDS"
+OPENAI_JUDGE_TIMEOUT_SECONDS = 120.0
+OPENAI_JUDGE_CONCURRENCY_ENV_VAR = "AUDIO_ARENA_OPENAI_JUDGE_CONCURRENCY"
+OPENAI_JUDGE_CONCURRENCY = 8
+OPENAI_JUDGE_SERVICE_TIER = "priority"
+OPENAI_JUDGE_PROMPT_CACHE_RETENTION = "24h"
+
+OPENAI_JUDGE_RESPONSE_SCHEMA = {
+    "type": "json_schema",
+    "name": "judge_output",
+    "strict": False,
+    "schema": {
+        "type": "object",
+        "additionalProperties": False,
+        "required": [
+            "final_judgments",
+            "realignment_notes",
+            "function_call_tracking",
+        ],
+        "properties": {
+            "final_judgments": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": [
+                        "turn",
+                        "turn_taking",
+                        "tool_use_correct",
+                        "instruction_following",
+                        "kb_grounding",
+                        "ambiguity_handling",
+                        "state_tracking",
+                        "reasoning",
+                    ],
+                    "properties": {
+                        "turn": {"type": "integer"},
+                        "turn_taking": {"type": "boolean"},
+                        "tool_use_correct": {"type": ["boolean", "null"]},
+                        "instruction_following": {"type": "boolean"},
+                        "kb_grounding": {"type": "boolean"},
+                        "ambiguity_handling": {"type": ["boolean", "null"]},
+                        "state_tracking": {"type": ["boolean", "null"]},
+                        "reasoning": {"type": "string"},
+                    },
+                },
+            },
+            "realignment_notes": {"type": "string"},
+            "function_call_tracking": {
+                "type": "object",
+                "additionalProperties": True,
+            },
+        },
+    },
+}
+
+
+def get_openai_judge_timeout_seconds() -> float:
+    raw_timeout = os.getenv(OPENAI_JUDGE_TIMEOUT_ENV_VAR)
+    if raw_timeout is None:
+        return OPENAI_JUDGE_TIMEOUT_SECONDS
+
+    try:
+        timeout_seconds = float(raw_timeout)
+    except ValueError:
+        print(
+            f"Ignoring invalid {OPENAI_JUDGE_TIMEOUT_ENV_VAR}={raw_timeout!r}; "
+            f"using default {OPENAI_JUDGE_TIMEOUT_SECONDS:.1f}s.",
+            file=sys.stderr,
+        )
+        return OPENAI_JUDGE_TIMEOUT_SECONDS
+
+    if timeout_seconds <= 0:
+        print(
+            f"Ignoring non-positive {OPENAI_JUDGE_TIMEOUT_ENV_VAR}={raw_timeout!r}; "
+            f"using default {OPENAI_JUDGE_TIMEOUT_SECONDS:.1f}s.",
+            file=sys.stderr,
+        )
+        return OPENAI_JUDGE_TIMEOUT_SECONDS
+
+    return timeout_seconds
+
+
+def get_openai_judge_concurrency() -> int:
+    raw_concurrency = os.getenv(OPENAI_JUDGE_CONCURRENCY_ENV_VAR)
+    if raw_concurrency is None:
+        return OPENAI_JUDGE_CONCURRENCY
+
+    try:
+        concurrency = int(raw_concurrency)
+    except ValueError:
+        print(
+            f"Ignoring invalid {OPENAI_JUDGE_CONCURRENCY_ENV_VAR}={raw_concurrency!r}; "
+            f"using default {OPENAI_JUDGE_CONCURRENCY}.",
+            file=sys.stderr,
+        )
+        return OPENAI_JUDGE_CONCURRENCY
+
+    if concurrency <= 0:
+        print(
+            f"Ignoring non-positive {OPENAI_JUDGE_CONCURRENCY_ENV_VAR}={raw_concurrency!r}; "
+            f"using default {OPENAI_JUDGE_CONCURRENCY}.",
+            file=sys.stderr,
+        )
+        return OPENAI_JUDGE_CONCURRENCY
+
+    return concurrency
+
+
+def build_openai_judge_prompt_cache_key(
+    run_dir: Path,
+    judge_version: str,
+    judge_model: str,
+    cross_turn_realignment: bool,
+) -> str:
+    benchmark_name = run_dir.parent.name
+    mode = "cross_turn" if cross_turn_realignment else "rehydrated"
+    raw_key = f"{judge_version}|{judge_model}|{benchmark_name}|{mode}"
+    key_hash = hashlib.sha1(raw_key.encode("utf-8")).hexdigest()[:16]
+    return f"aa-judge:{benchmark_name}:{mode}:{key_hash}"
+
+
+def build_openai_responses_request_kwargs(
+    *,
+    judge_model: str,
+    system_prompt: str,
+    prompt: str,
+    prompt_cache_key: str,
+) -> Dict[str, Any]:
+    return {
+        "model": judge_model,
+        "instructions": system_prompt,
+        "input": prompt,
+        "temperature": 0,
+        "service_tier": OPENAI_JUDGE_SERVICE_TIER,
+        "prompt_cache_key": prompt_cache_key,
+        "prompt_cache_retention": OPENAI_JUDGE_PROMPT_CACHE_RETENTION,
+        "text": {"format": OPENAI_JUDGE_RESPONSE_SCHEMA},
+    }
 
 
 def _parse_openai_judge_response(response_text: str) -> Dict[str, Any]:
-    """Extract the judge JSON object from a chat completion response."""
+    """Extract the judge JSON object from a Responses API result."""
     json_start = response_text.find('{')
     json_end = response_text.rfind('}') + 1
 
@@ -138,43 +281,36 @@ async def judge_with_openai(
 
     system_prompt = build_judge_system_prompt(cross_turn_realignment)
 
-    client = AsyncOpenAI()
-
-    # o3 / o-series models use developer messages instead of system messages
-    is_o_series = judge_model.startswith("o")
-
-    def _build_messages(prompt: str) -> List[Dict[str, str]]:
-        messages: List[Dict[str, str]] = []
-        if is_o_series:
-            messages.append({"role": "developer", "content": system_prompt})
-        else:
-            messages.append({"role": "system", "content": system_prompt})
-        messages.append({"role": "user", "content": prompt})
-        return messages
+    client = AsyncOpenAI(timeout=get_openai_judge_timeout_seconds())
 
     async def _request_judgment(prompt: str) -> Dict[str, Any]:
-        kwargs: Dict[str, Any] = {
-            "model": judge_model,
-            "messages": _build_messages(prompt),
-        }
-        if is_o_series:
-            kwargs["reasoning_effort"] = "high"
-            kwargs["response_format"] = {"type": "json_object"}
-        else:
-            kwargs["response_format"] = {"type": "json_object"}
-            kwargs["temperature"] = 0
+        prompt_cache_key = build_openai_judge_prompt_cache_key(
+            run_dir=run_dir,
+            judge_version=judge_version,
+            judge_model=judge_model,
+            cross_turn_realignment=cross_turn_realignment,
+        )
+        kwargs = build_openai_responses_request_kwargs(
+            judge_model=judge_model,
+            system_prompt=system_prompt,
+            prompt=prompt,
+            prompt_cache_key=prompt_cache_key,
+        )
 
         if debug:
-            print(f"Sending request to OpenAI ({judge_model})...", file=sys.stderr)
+            print(
+                f"Sending Responses API request to OpenAI ({judge_model})...",
+                file=sys.stderr,
+            )
 
-        response = await client.chat.completions.create(**kwargs)
-        response_text = response.choices[0].message.content or ""
+        response = await client.responses.create(**kwargs)
+        response_text = response.output_text or ""
 
         if debug:
             print(f"OpenAI response length: {len(response_text)} chars", file=sys.stderr)
             if response.usage:
                 print(
-                    f"Tokens: {response.usage.prompt_tokens} prompt, {response.usage.completion_tokens} completion",
+                    f"Tokens: {response.usage.input_tokens} input, {response.usage.output_tokens} output",
                     file=sys.stderr,
                 )
 
@@ -198,7 +334,18 @@ async def judge_with_openai(
             [record["turn"] for record in records],
             cross_turn_realignment,
         )
+        request_started = time.perf_counter()
+        print(
+            f"[openai-judge] Requesting combined judgment for {len(records)} turns...",
+            file=sys.stderr,
+            flush=True,
+        )
         result = await _request_judgment(prompt)
+        print(
+            f"[openai-judge] Combined judgment finished in {time.perf_counter() - request_started:.1f}s.",
+            file=sys.stderr,
+            flush=True,
+        )
         final_judgments = result.get('final_judgments', [])
         realignment_notes = result.get('realignment_notes', '')
         function_tracking = result.get('function_call_tracking', {})
@@ -214,16 +361,57 @@ async def judge_with_openai(
             kb_text=kb_text,
             prompt_visible_kb_text=prompt_visible_kb_text,
         )
-        for bundle in prompt_bundles:
-            if debug:
-                print(f"Judging rehydrated turn {bundle['turn']} in isolation...", file=sys.stderr)
-            result = await _request_judgment(bundle["prompt"])
-            judgments_for_turn = result.get("final_judgments", [])
-            if len(judgments_for_turn) != 1:
-                raise ValueError(
-                    f"Expected exactly 1 judgment for rehydrated turn {bundle['turn']}, got {len(judgments_for_turn)}"
+        total_bundles = len(prompt_bundles)
+        concurrency = min(get_openai_judge_concurrency(), total_bundles)
+        semaphore = asyncio.Semaphore(concurrency)
+        print(
+            f"[openai-judge] Requesting {total_bundles} rehydrated turn judgments with concurrency={concurrency}...",
+            file=sys.stderr,
+            flush=True,
+        )
+
+        async def _judge_rehydrated_bundle(
+            bundle_index: int,
+            bundle: Dict[str, Any],
+        ) -> Dict[str, Any]:
+            async with semaphore:
+                if debug:
+                    print(
+                        f"Judging rehydrated turn {bundle['turn']} in isolation...",
+                        file=sys.stderr,
+                    )
+                print(
+                    f"[openai-judge] {bundle_index}/{total_bundles} judging rehydrated turn {bundle['turn']}...",
+                    file=sys.stderr,
+                    flush=True,
                 )
-            final_judgments.extend(judgments_for_turn)
+                request_started = time.perf_counter()
+                result = await _request_judgment(bundle["prompt"])
+                print(
+                    f"[openai-judge] {bundle_index}/{total_bundles} finished turn {bundle['turn']} in {time.perf_counter() - request_started:.1f}s.",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                judgments_for_turn = result.get("final_judgments", [])
+                if len(judgments_for_turn) != 1:
+                    raise ValueError(
+                        f"Expected exactly 1 judgment for rehydrated turn {bundle['turn']}, got {len(judgments_for_turn)}"
+                    )
+                return {
+                    "bundle_index": bundle_index,
+                    "turn": bundle["turn"],
+                    "judgment": judgments_for_turn[0],
+                }
+
+        bundle_tasks = [
+            asyncio.create_task(_judge_rehydrated_bundle(bundle_index, bundle))
+            for bundle_index, bundle in enumerate(prompt_bundles, start=1)
+        ]
+        bundle_results = await asyncio.gather(*bundle_tasks)
+        bundle_results.sort(key=lambda result: result["bundle_index"])
+
+        for bundle_result in bundle_results:
+            final_judgments.append(bundle_result["judgment"])
 
     apply_precomputed_oracle_tool_use(final_judgments, records)
 
