@@ -23,6 +23,7 @@ from audio_arena.judging.openai_judge import (
     OPENAI_JUDGE_CONCURRENCY,
     OPENAI_JUDGE_CONCURRENCY_ENV_VAR,
     OPENAI_JUDGE_PROMPT_CACHE_RETENTION,
+    OPENAI_JUDGE_RESPONSE_SCHEMA,
     OPENAI_JUDGE_SERVICE_TIER,
     OPENAI_JUDGE_TIMEOUT_ENV_VAR,
     OPENAI_JUDGE_TIMEOUT_SECONDS,
@@ -1608,6 +1609,26 @@ class JudgeAndRehydrationRegressionTests(unittest.TestCase):
         )
         self.assertEqual(kwargs["temperature"], 0)
         self.assertEqual(kwargs["text"]["format"]["type"], "json_schema")
+
+    def test_openai_judge_schema_puts_reasoning_before_pass_fields(self):
+        judgment_item = OPENAI_JUDGE_RESPONSE_SCHEMA["schema"]["properties"][
+            "final_judgments"
+        ]["items"]
+        property_names = list(judgment_item["properties"].keys())
+        required_names = judgment_item["required"]
+
+        self.assertEqual(property_names[0], "turn")
+        self.assertEqual(property_names[1], "reasoning")
+        self.assertEqual(required_names[0], "turn")
+        self.assertEqual(required_names[1], "reasoning")
+        self.assertLess(
+            property_names.index("reasoning"),
+            property_names.index("turn_taking"),
+        )
+        self.assertLess(
+            required_names.index("reasoning"),
+            required_names.index("turn_taking"),
+        )
 
 
 if __name__ == "__main__":
