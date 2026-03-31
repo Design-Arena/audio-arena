@@ -370,7 +370,7 @@ def build_live_tool_capture_from_transcript(
     ]
 
     tool_name_correct = len(matching_name_calls) == len(actual_tool_calls)
-    tool_args_correct = matched_expected == len(oracle_calls)
+    tool_args_correct = matched_expected == len(oracle_calls) and not remaining_actual_indices
     return {
         "actual_tool_calls": actual_tool_calls,
         "actual_tool_results": actual_tool_results,

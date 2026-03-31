@@ -225,7 +225,7 @@ turns = [
                 "with that. I'll just need the Session ID for the talk you'd like to vote for. I "
                 'already have your name as Jennifer Smith.',
  'required_function_call': None,
- 'categories': ['basic_qa'],
+ 'categories': ['basic_qa', 'long_range_memory'],
  'audio_file': 'audio/turn_019.wav'},
 
 {'input': "I don't know the session ID, but the talk was by Harald Kirschner.",
@@ -376,7 +376,7 @@ turns = [
  'audio_file': 'audio/turn_032.wav'},
 
 {'input': "The speaker who gave the MCP keynote on June 4th — what company are they from, "
-          "and do any other speakers from that same company present at this conference?",
+          "and who are all the other speakers from that same company presenting at this conference?",
  'golden_text': "The MCP keynote on June 4th was given by Theodora Chu, who is a Product "
                 "Manager at Anthropic.\n\n"
                 "In addition to Theodora Chu, Anthropic has:\n\n"
@@ -814,7 +814,7 @@ turns = [
 # TURNS 65-67: NEGATION REASONING
 # ============================================================================
 
-{'input': "I want to minimize room changes on June 4th morning. What sessions happen in "
+{'input': "I want to minimize room changes on June 4th between 8 AM and 4 PM. What sessions happen in "
           "the same room as the keynotes?",
  'golden_text': "The keynotes are in Yerba Buena Ballroom Salons 7-8 (Sam Altman at 9:00 AM "
                 "and Dario Amodei at 10:00 AM). After the morning break, the MCP track takes "

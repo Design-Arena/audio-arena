@@ -348,6 +348,53 @@ class JudgeAndRehydrationRegressionTests(unittest.TestCase):
             "SESSION_FULL",
         )
 
+    def test_build_live_tool_capture_from_transcript_fails_extra_same_name_calls(self):
+        turn = {
+            "input": "do both actions",
+            "required_function_call": [
+                {"name": "tool_a", "args": {"value": "1"}},
+                {"name": "tool_a", "args": {"value": "2"}},
+            ],
+            "function_call_response": [
+                {"status": "success"},
+                {"status": "success"},
+            ],
+        }
+
+        with TemporaryDirectory() as tmpdir:
+            transcript_path = Path(tmpdir) / "transcript.jsonl"
+            transcript_path.write_text(
+                json.dumps(
+                    {
+                        "turn": 0,
+                        "user_text": turn["input"],
+                        "assistant_text": "handled",
+                        "tool_calls": [
+                            {"name": "tool_a", "args": {"value": "extra"}},
+                            {"name": "tool_a", "args": {"value": "1"}},
+                            {"name": "tool_a", "args": {"value": "2"}},
+                        ],
+                        "tool_results": [
+                            {"name": "tool_a", "response": {"status": "error"}},
+                            {"name": "tool_a", "response": {"status": "success"}},
+                            {"name": "tool_a", "response": {"status": "success"}},
+                        ],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            capture = build_live_tool_capture_from_transcript(
+                turn=turn,
+                transcript_path=transcript_path,
+            )
+
+        self.assertTrue(capture["tool_name_correct"])
+        self.assertFalse(capture["tool_args_correct"])
+        self.assertFalse(capture["tool_use_pass"])
+        self.assertEqual(len(capture["actual_tool_calls"]), 3)
+
     def test_merge_oracle_continuation_artifacts_preserves_multi_call_live_capture(self):
         with TemporaryDirectory() as tmpdir:
             transcript_path = Path(tmpdir) / "transcript.jsonl"
